@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.tmp/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.tgz
+.env
+.env.*
+*credentials*
+*.log
+config.json
+coverage/

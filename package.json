@@ -1,0 +1,21 @@
+{
+  "name": "@yash456k/sticky-notes",
+  "version": "0.1.0",
+  "description": "Shared memory and inert task data for agents, backed by one authoritative SQLite database",
+  "type": "module",
+  "bin": { "sticky": "dist/cli.js" },
+  "exports": { ".": "./dist/index.js", "./client": "./dist/client.js", "./sqlite": "./dist/sqlite.js" },
+  "files": ["dist", "README.md", "docs", "LICENSE"],
+  "engines": { "node": ">=24.0.0" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test --test-concurrency=1 tests/*.test.mjs",
+    "bench": "npm run build && node scripts/bench.mjs",
+    "prepack": "npm run build"
+  },
+  "dependencies": { "@modelcontextprotocol/sdk": "^1.27.1", "zod": "^4.3.6" },
+  "devDependencies": { "@types/node": "^24.0.0", "typescript": "^5.9.3" },
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/Yash456k/sticky-notes.git" }
+}

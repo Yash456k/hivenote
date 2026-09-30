@@ -1,0 +1,81 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { join } from 'node:path';
+import { access } from 'node:fs/promises';
+import { SqliteStore } from '../dist/sqlite.js';
+import { startServer } from '../dist/http.js';
+import { sandbox, fixture, cliJson, run, cli, actor, closeServer, serverUrl } from './helpers.mjs';
+
+async function exercise(args, env) {
+  const call = (method, params = {}) => cliJson([...args, method, '--params', JSON.stringify(params)], { env });
+  const created = await call('create', fixture({ name: 'CLI Résumé 日本語', content: 'alpha unique beta' }));
+  const id = created.note.id;
+  assert.equal(created.note.rev, 1);
+  assert.equal((await call('list')).total, 1);
+  assert.equal((await call('read', { names: ['CLI Résumé 日本語'] })).notes[0].id, id);
+  assert.equal((await call('search', { query: 'unique' })).total, 1);
+  const edited = await call('edit', { id, old_str: 'unique', new_str: 'edited', base_rev: 1 });
+  assert.equal(edited.note.content, 'alpha edited beta');
+  const appended = await call('append', { id, body: 'CLI activity' });
+  assert.equal(appended.note.rev, 2);
+  const replaced = await call('replace', { id, content: 'replacement', base_rev: 2 });
+  assert.equal(replaced.note.rev, 3);
+  assert.equal((await call('revision', { id, rev: 1 })).note.content, 'alpha unique beta');
+  assert.equal((await call('history', { id })).total, 4);
+  const stale = await run(process.execPath, [cli, ...args, 'replace', '--params', JSON.stringify({ id, base_rev: 1, content: 'stale' })], { env });
+  assert.notEqual(stale.code, 0);
+  assert.match(`${stale.stderr}\n${stale.stdout}`, /conflict|revision|409/iu);
+  assert.equal((await call('read', { ids: [id] })).notes[0].rev, 3);
+  const deleted = await call('delete', { id, base_rev: 3 });
+  assert.equal(deleted.note.rev, 4);
+  const restored = await call('restore', { id, rev: 1, base_rev: 4 });
+  assert.equal(restored.note.rev, 5);
+  const task = await call('create', fixture({ name: 'CLI task', kind: 'task' }));
+  assert.ok((await call('claim', { id: task.note.id })).note.claimed_by);
+  const released = await call('release', { id: task.note.id });
+  assert.equal(released.note.claimed_by, null);
+  assert.equal((await call('update-task', { id: task.note.id, status: 'done', base_rev: released.note.rev })).note.status, 'done');
+  const events = await call('changes', { since: 0, limit: 100 });
+  assert.equal(events.events.length, 10);
+  return created;
+}
+
+test('real local CLI subprocesses implement every operation, errors and paths with spaces/non-ASCII', { timeout: 120_000 }, async t => {
+  const dir = await sandbox(t, 'cli-local');
+  const db = join(dir, 'notes with spaces 日本語.sqlite');
+  const env = { STICKY_HOME: join(dir, 'isolated config') };
+  const help = await run(process.execPath, [cli, '--help'], { env });
+  assert.equal(help.code, 0, help.stderr);
+  assert.match(help.stdout, /sticky|usage/iu);
+  const version = await run(process.execPath, [cli, '--version'], { env });
+  assert.equal(version.code, 0, version.stderr);
+  assert.match(version.stdout, /0\.1\.0/u);
+  await exercise(['--db', db], env);
+  await access(db);
+});
+
+test('real remote CLI subprocesses use authenticated HTTP and never create a local database', { timeout: 120_000 }, async t => {
+  const dir = await sandbox(t, 'cli-remote');
+  const store = new SqliteStore(join(dir, 'authority.sqlite'), actor());
+  const token = store.tokenCreate('cli-device', 'rw');
+  const ro = store.tokenCreate('reader', 'ro');
+  const server = await startServer(store, { host: '127.0.0.1', port: 0 });
+  t.after(async () => { await closeServer(server); store.close(); });
+  const url = serverUrl(server);
+  const configHome = join(dir, 'remote config');
+  const env = { STICKY_HOME: configHome, STICKY_TOKEN: token.token };
+  const created = await exercise(['--url', url], env);
+  assert.equal(created.note.last_attribution.principal, token.principal);
+  assert.equal(created.note.last_attribution.verified, true);
+  await assert.rejects(access(join(configHome, 'data.db')));
+  const missing = await run(process.execPath, [cli, '--url', url, 'list'], { env: { ...env, STICKY_TOKEN: '' } });
+  assert.notEqual(missing.code, 0);
+  const forbidden = await run(process.execPath, [cli, '--url', url, 'create', '--params', JSON.stringify(fixture())], { env: { ...env, STICKY_TOKEN: ro.token } });
+  assert.notEqual(forbidden.code, 0);
+  const conflictingMode = await run(process.execPath, [cli, '--url', url, '--db', join(dir, 'must not exist.sqlite'), 'list'], { env });
+  assert.notEqual(conflictingMode.code, 0);
+  await assert.rejects(access(join(dir, 'must not exist.sqlite')));
+  store.tokenRevoke(token.id);
+  const revoked = await run(process.execPath, [cli, '--url', url, 'list'], { env });
+  assert.notEqual(revoked.code, 0);
+});
