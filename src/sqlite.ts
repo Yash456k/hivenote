@@ -19,7 +19,7 @@ const FIELDS: Record<Method, string[]> = {
 export function localActor(): Actor { return { principal: 'local', device: 'local', scope: 'rw', verified: false }; }
 function invalid(message: string): never { throw new StickyError('validation_error', message); }
 function text(value: unknown, label: string, max: number, empty = false): string {
-  if (typeof value !== 'string' || (!empty && !value.trim()) || Buffer.byteLength(value, 'utf8') > max || value.includes('\0')) invalid(`${label} must be ${empty ? 'a' : 'a nonempty'} UTF-8 string of at most ${max} bytes, without NUL`);
+  if (typeof value !== 'string' || (!empty && !value.trim()) || /[\uD800-\uDFFF]/u.test(value) || Buffer.byteLength(value, 'utf8') > max || value.includes('\0')) invalid(`${label} must be ${empty ? 'a' : 'a nonempty'} well-formed UTF-8 string of at most ${max} bytes, without NUL`);
   return value;
 }
 function integer(value: unknown, label: string, min: number, max = Number.MAX_SAFE_INTEGER): number {
@@ -29,12 +29,16 @@ function integer(value: unknown, label: string, min: number, max = Number.MAX_SA
 function id(value: unknown): string { const s = text(value, 'id', 36); if (!UUID.test(s)) invalid('id must be a UUID'); return s; }
 function json(value: unknown, depth = 0): unknown {
   if (depth > 20) invalid('JSON nesting exceeds 20 levels');
+  if (typeof value === 'string' && /[\uD800-\uDFFF]/u.test(value)) invalid('JSON strings must contain well-formed Unicode');
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (Array.isArray(value)) return value.map(v => json(v, depth + 1));
   if (value && typeof value === 'object' && [Object.prototype, null].includes(Object.getPrototypeOf(value) as object|null)) {
     const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
-    for (const key of Object.keys(value).sort()) result[key] = json((value as Row)[key], depth + 1);
+    for (const key of Object.keys(value).sort()) {
+      if (/[\uD800-\uDFFF]/u.test(key)) invalid('JSON keys must contain well-formed Unicode');
+      result[key] = json((value as Row)[key], depth + 1);
+    }
     return result;
   }
   return invalid('Values must be JSON (no undefined, functions, cycles, or nonfinite numbers)');
@@ -152,6 +156,9 @@ export class SqliteStore implements Store {
       const op = text(params.op_id, 'op_id', 128);
       const request = JSON.stringify(json({ method, params }));
       return this.transaction(() => {
+        // A different connection may revoke access while BEGIN IMMEDIATE waits.
+        // Recheck inside the lock, before receipt replay or any state change.
+        actor = this.authorize(actor, true);
         const receipt = this.get('SELECT * FROM receipts WHERE op_id=?', op);
         if (receipt) {
           if (receipt.principal !== actor.principal || receipt.request !== request) throw new StickyError('op_id_conflict', 'op_id already used for a different principal or request', 409);
@@ -162,7 +169,14 @@ export class SqliteStore implements Store {
         return result;
       });
     }
-    return this.transaction(() => this.query(method, params), false);
+    return this.transaction(() => { this.authorize(actor, false); return this.query(method, params); }, false);
+  }
+  private authorize(actor: Actor, write: boolean): Actor {
+    if (!actor.verified) return actor;
+    const row = this.get('SELECT principal,device,scope FROM clients WHERE principal=? AND revoked=0', actor.principal);
+    if (!row) throw new StickyError('unauthorized', 'Invalid or revoked token', 401);
+    if (write && row.scope !== 'rw') throw new StickyError('forbidden', 'Token is read-only', 403);
+    return { ...actor, principal: row.principal as string, device: row.device as string, scope: row.scope as 'ro'|'rw' };
   }
   private find(noteId: unknown, deleted = false): Note {
     const key = id(noteId);

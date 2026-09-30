@@ -6,7 +6,8 @@ import { randomUUID } from 'node:crypto';
 
 export const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const cli = join(root, 'dist/cli.js');
-export const actor = (principal = 'test-user', device = 'test-device', scope = 'rw') => ({ principal, device, scope, verified: true });
+// Direct test actors model local filesystem callers, not authenticated tokens.
+export const actor = (principal = 'test-user', device = 'test-device', scope = 'rw') => ({ principal, device, scope, verified: false });
 export const params = (extra = {}) => ({ op_id: randomUUID(), ...extra });
 export const fixture = (extra = {}) => ({ id: randomUUID(), name: `note-${randomUUID()}`, description: 'Regression fixture', content: 'alpha\nbeta\ngamma', ...extra });
 
