@@ -32,8 +32,8 @@ npm install --prefix ./installation ./yash456k-sticky-notes-0.1.0.tgz
 ```
 
 Alternatively install an owner-provided tarball with the last two commands.
-A global tarball install is optional (`npm install -g ./PACKAGE.tgz`); this project
-has not been published or globally installed by the implementation agent.
+A global tarball install is optional (`npm install -g ./PACKAGE.tgz`); npm registry
+publication is not required to install a tarball.
 In source development use `node dist/cli.js` in place of `sticky` below.
 `npm pack` compiles first. The tarball includes compiled JS/types, docs and license,
 not source fixtures, credentials, databases or node_modules. On npm versions

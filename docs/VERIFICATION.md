@@ -1,15 +1,15 @@
 # Verification: executed results
 
-All checks below used disposable fixture databases on Linux x64, never a real
-user database. Nothing was published, pushed, globally installed, configured on
-a user's PC, or deployed. GitHub Actions remains pending parent review/push.
+Checks below used disposable fixture databases on Linux x64, never a real
+user database. The npm package is unpublished. PC integration and actual
+cross-device transport are not covered by these Linux verification results.
 
 ## Runtime matrix actually executed
 
 | Runtime | Package manager | Build/typecheck | node:test | Installed artifact |
 |---|---|---|---|---|
-| Node 26.5.1 | npm 12.0.2 | pass | 29 pass, 0 fail/skip | actual bin + MCP pass |
-| Node 24.0.0 | npm 11.3.0 | pass | 29 pass, 0 fail/skip | actual bin + MCP pass |
+| Node 26.5.1 | npm 12.0.2 | pass | 62 pass, 0 fail/skip | actual bin + MCP pass |
+| Node 24.0.0 | npm 11.3.0 | pass | 62 pass, 0 fail/skip | actual bin + MCP pass |
 
 Node 24 was installed only into ignored task-local `.tmp/` for verification.
 The baseline run performed a fresh `npm ci`, typecheck, build/full tests and
@@ -70,6 +70,23 @@ Initial integration runs caught a JSON prototype mismatch and an installed-bin
 symlink entrypoint bug; both were fixed and covered before the passing runs.
 The packaging helper handles npm 11 array and npm 12 name-keyed JSON inventory.
 
+Independent reviews found and reproduced an authorization race during SQLite
+write-lock acquisition, malformed Unicode diverging between stored content and
+receipts, and CLI/MCP contract edge cases. Regression tests failed before the
+fixes and passed afterward. The full 62-test suite and actual packed CLI/MCP
+installation were rerun on both runtimes after those corrections:
+
+- Authorization is revalidated within the acquired transaction, before writes
+  or receipt replay. A separate process commits revocation while an HTTP write
+  waits; the write is rejected with no note/event. Cached authenticated actors
+  cannot bypass later revocation.
+- Ill-formed Unicode is rejected rather than silently changed by UTF-8 binding;
+  valid emoji and non-ASCII text round-trip through notes and revisions.
+- Repeated non-batch selectors, unsupported command options and conflicting
+  raw/native fields fail without silently discarding inputs. Explicit false
+  help/version flags and whitespace-prefixed selector JSON behave correctly.
+- MCP annotations conservatively identify non-additive mutations.
+
 ## Packed artifact
 
 `pack-smoke.mjs` runs real `npm pack --dry-run --json`, creates the tarball,
@@ -113,10 +130,10 @@ Cloudflare, Tailscale or Internet measurements. Cold CLI includes Node startup,
 SQLite opening/schema-version check and JSON output. Expected run-to-run jitter
 is visible; this is not a production capacity claim.
 
-## Remaining limits / independent review
+## Remaining limits
 
-- Remote GitHub CI and clean remote clone/host installation remain for the parent;
-  workflow uses pinned actions and a Linux Node 24.0.0/24/26 matrix.
+- GitHub workflow uses pinned actions and a Linux Node 24.0.0/24/26 matrix;
+  check the repository's Actions page for the result at a particular commit.
 - No Windows/macOS, cross-device tunnel, high-latency network or production-load
   claim; synchronous SQLite can block the server during busy waits/large queries.
 - FS/network-sync folder detection is not comprehensive: local-disk deployment
