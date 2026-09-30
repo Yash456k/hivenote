@@ -28,7 +28,7 @@ try {
   const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
   const dry = npmJson((await checked('npm', ['pack', '--dry-run', '--json'])).stdout)[0];
   const shipped = new Set(dry.files.map(file => file.path));
-  for (const path of ['package.json', 'dist/cli.js', 'dist/client.js', 'dist/sqlite.js', 'dist/http.js', 'dist/mcp.js', 'README.md']) assert.ok(shipped.has(path), `Missing package file: ${path}`);
+  for (const path of ['package.json', 'dist/cli.js', 'dist/client.js', 'dist/sqlite.js', 'dist/http.js', 'dist/mcp.js', 'dist/wait.js', 'dist/runtime.js', 'skills/hivenote/SKILL.md', 'README.md']) assert.ok(shipped.has(path), `Missing package file: ${path}`);
   assert.ok(!dry.files.some(file => /^(?:tests|\.tmp|src|node_modules)\//u.test(file.path)), 'Package must not ship fixtures, source or dependencies');
   assert.ok(!dry.files.some(file => /(?:\.db(?:-|$)|\.sqlite(?:-|$)|\.env|credentials|\.log$)/iu.test(file.path)), 'Package must not ship databases, tokens, env or logs');
   const packed = npmJson((await checked('npm', ['pack', '--json', '--pack-destination', dir])).stdout)[0];

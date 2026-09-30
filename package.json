@@ -5,7 +5,7 @@
   "type": "module",
   "bin": { "hivenote": "dist/cli.js" },
   "exports": { ".": "./dist/index.js", "./client": "./dist/client.js", "./sqlite": "./dist/sqlite.js" },
-  "files": ["dist", "README.md", "docs", "LICENSE"],
+  "files": ["dist", "README.md", "docs", "skills", "LICENSE"],
   "engines": { "node": ">=22.16.0" },
   "scripts": {
     "build": "tsc -p tsconfig.json",

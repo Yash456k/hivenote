@@ -11,14 +11,19 @@ caches, replicas, Redis, ORM, vector database or provider SDKs.
 
 ## Runtime and installation
 
-Node **24.0.0 or newer** is the API baseline; use a maintained Node 24 patch release
-in normal use. Linux tests ran on 24.0.0 and 26.5.1. Built-in `node:sqlite` is
-Stability 1.1 / active development in [Node 24.0.0](https://nodejs.org/download/release/v24.0.0/docs/api/sqlite.html)
-and emits an experimental warning to stderr. No SQLite flag or native npm addon
-is required. Windows/macOS-compatible source has not been tested on those OSes.
+Node **22.16 or newer**. HiveNote uses Node's built-in `node:sqlite`, so no native
+addon or SQLite flag is needed. 22.16 is the first release whose built-in SQLite
+includes full-text search (FTS5); older Node prints a clear `unsupported_node`
+error. Node 22 flags `node:sqlite` as experimental; HiveNote silences only that
+warning. CI tests 22.16.0, 22, 24 and 26 on Linux. Windows/macOS-compatible source
+has not been tested on those OSes.
 
-The package `hivenote@0.1.0` is **unpublished on npm**.
-This GitHub repository is private. Installation from authorized GitHub source:
+```sh
+npm install -g hivenote
+hivenote --help
+```
+
+Installation from GitHub source:
 
 ```sh
 git clone git@github.com:Yash456k/hivenote.git
@@ -70,6 +75,12 @@ hivenote restore NOTE_UUID --rev 1 --base-rev 4
 hivenote changes --since 0 --limit 100
 ```
 
+`list` and `search` return brief entries (id, name, description, kind,
+updated_at, plus status/due/claim for tasks) so an agent can decide what to read.
+`--full` (`detail: "full"` over RPC/MCP) returns every stored field except content.
+Edits and replacements that would change nothing are rejected rather than
+creating empty revisions.
+
 All commands output JSON by default (`--json` is also accepted). Errors are JSON
 on stderr with nonzero exit. `--help` and `--version` need no database.
 `--content`, `--body`, `--old-str`, `--new-str` accept literal strings, including
@@ -109,6 +120,20 @@ hivenote claim TASK_UUID --ttl-seconds 900
 hivenote update-task TASK_UUID --base-rev 2 --status doing --due-at 2030-01-02T03:04:05Z
 hivenote release TASK_UUID
 ```
+
+To hand work between agents, one agent waits while another finishes:
+
+```sh
+hivenote wait --name release-check --status done   # blocks until the task is done
+hivenote wait --id NOTE_UUID                       # blocks until any change or append
+```
+
+`wait` prints the note and its latest appended progress when the condition is met,
+and exits nonzero on timeout (default 540 seconds; `--timeout-seconds 0` waits
+forever) or if the note is deleted. It polls with `read` every `--interval-ms`
+(default 1000), so it works the same against a local database or a remote server
+and needs only a read-only token. It never starts agents or runs commands: a user
+script can do that, e.g. `hivenote wait --name X --status done && your-command`.
 
 Statuses: `todo`, `doing`, `done`, `cancelled`; `--due-at null` clears a due date.
 Claims are atomic cooperative leases, not scheduling or authorization. Expiry is
@@ -174,6 +199,15 @@ limit is 1 MiB, methods/fields are allowlisted, errors sanitized, no permissive
 CORS. `agent`/`session` are unverified labels (`labels_verified:false`);
 `verified:true` applies only to token principal/device. Local attribution is
 `verified:false`. No automatic native agent/session identity inference.
+
+## Agent skill
+
+[`skills/hivenote/SKILL.md`](skills/hivenote/SKILL.md) teaches an agent to use
+HiveNote through the CLI: list names and descriptions, read only what is relevant,
+update existing notes instead of duplicating them, and hand off tasks with
+`append`, `update-task` and `wait`. For Claude Code, copy the folder to
+`~/.claude/skills/hivenote/` (all projects) or `.claude/skills/hivenote/` (one
+project). Other agents that read `SKILL.md` skills can use the same file.
 
 ## MCP examples (do not edit global configs automatically)
 
@@ -250,5 +284,5 @@ feed. See [architecture](docs/ARCHITECTURE.md) and [real verification](docs/VERI
 
 Development: `npm ci`, `npm run typecheck`, `npm test`, `npm run bench`,
 `node scripts/pack-smoke.mjs`. The smoke test installs a tarball into a disposable
-prefix and runs the actual installed CLI and MCP SDK exchange. CI is committed
-but was not run remotely before parent review/push.
+prefix and runs the actual installed CLI and MCP SDK exchange. CI runs all of
+this on every push.
