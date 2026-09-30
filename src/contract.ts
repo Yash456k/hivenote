@@ -41,9 +41,9 @@ export function clientParams(method: Method, params: Params = {}): Params {
 }
 
 /* Stable v0.1 wire contract (all optional fields omitted, not undefined):
- list {offset?,limit?,kind?,status?} => {notes: Omit<Note,'content'>[], total,offset,has_more}
+ list {offset?,limit?,kind?,status?,detail?:'brief'|'full'} => {notes: BriefNote[] (or Omit<Note,'content'>[] when full), total,offset,has_more}
  read {ids?:string[],names?:string[]} exactly one selector => {notes:Note[],missing:string[]}
- search {query,offset?,limit?} => {notes:(Omit<Note,'content'>&{snippet})[],total,offset,has_more}
+ search {query,offset?,limit?,detail?} => {notes:(BriefNote&{snippet})[],total,offset,has_more}
  create {id?:UUID,name,description,content,kind?,metadata?,status?,due_at?,op_id}
  edit {id,old_str,new_str,base_rev?,op_id}; replace {id,content?,name?,description?,metadata?,base_rev,op_id}
  append {id,body,op_id}; delete {id,base_rev,op_id}

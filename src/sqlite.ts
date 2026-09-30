@@ -8,7 +8,7 @@ type Row = Record<string, unknown>;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const STATUSES = ['todo','doing','done','cancelled'];
 const FIELDS: Record<Method, string[]> = {
-  list: ['offset','limit','kind','status'], read: ['ids','names'], search: ['query','offset','limit'],
+  list: ['offset','limit','kind','status','detail'], read: ['ids','names'], search: ['query','offset','limit','detail'],
   create: ['id','name','description','content','kind','metadata','status','due_at','op_id'],
   edit: ['id','old_str','new_str','base_rev','op_id'], replace: ['id','content','name','description','metadata','base_rev','op_id'],
   append: ['id','body','op_id'], delete: ['id','base_rev','op_id'], history: ['id','offset','limit'],
@@ -86,6 +86,25 @@ function toEvent(row: Row): Event {
   return { ...row, snapshot: row.snapshot === null ? null : JSON.parse(row.snapshot as string), attribution: JSON.parse(row.attribution as string) } as unknown as Event;
 }
 function summary(note: Note): Omit<Note,'content'> { const { content: _content, ...rest } = note; return rest; }
+
+/** What an agent needs to decide whether to read a note: identity, what it is for, and task state. */
+export interface BriefNote {
+  id: string; name: string; description: string; kind: Note['kind']; updated_at: string;
+  status?: NonNullable<Note['status']>; due_at?: string; claimed_by?: string;
+}
+function brief(note: Note): BriefNote {
+  const entry: BriefNote = { id: note.id, name: note.name, description: note.description, kind: note.kind, updated_at: note.updated_at };
+  if (note.status !== null) entry.status = note.status;
+  if (note.due_at !== null) entry.due_at = note.due_at;
+  if (note.claimed_by !== null) entry.claimed_by = note.claimed_by;
+  return entry;
+}
+/** list and search return brief entries unless the caller asks for full summaries. */
+function view(detail: unknown): (note: Note) => BriefNote | Omit<Note,'content'> {
+  if (detail === undefined || detail === 'brief') return brief;
+  if (detail === 'full') return summary;
+  return invalid("detail must be 'brief' or 'full'");
+}
 
 export class SqliteStore implements Store {
   private db: DatabaseSync;
@@ -290,13 +309,13 @@ export class SqliteStore implements Store {
   private query(method: Method, p: Params): unknown {
     switch (method) {
       case 'list': {
-        const {limit,offset} = this.page(p);
+        const {limit,offset} = this.page(p); const shape = view(p.detail);
         const where = ['deleted_at IS NULL']; const args: SQLInputValue[] = [];
         if (p.kind !== undefined) { if (p.kind !== 'note' && p.kind !== 'task') invalid('Invalid kind'); where.push('kind=?'); args.push(p.kind); }
         if (p.status !== undefined) { if (!STATUSES.includes(p.status as string)) invalid('Invalid status'); where.push('status=?'); args.push(p.status as string); }
         const clause = where.join(' AND ');
         const total = Number(this.get(`SELECT count(*) AS n FROM notes WHERE ${clause}`, ...args)?.n);
-        const notes = this.all(`SELECT * FROM notes WHERE ${clause} ORDER BY name,id LIMIT ? OFFSET ?`, ...args,limit,offset).map(r => summary(toNote(r)));
+        const notes = this.all(`SELECT * FROM notes WHERE ${clause} ORDER BY name,id LIMIT ? OFFSET ?`, ...args,limit,offset).map(r => shape(toNote(r)));
         return { notes,total,offset,has_more: offset + notes.length < total };
       }
       case 'read': {
@@ -318,10 +337,10 @@ export class SqliteStore implements Store {
         return { notes,missing,updates,updates_has_more };
       }
       case 'search': {
-        const {limit,offset} = this.page(p); const q = text(p.query,'query',1024);
+        const {limit,offset} = this.page(p); const q = text(p.query,'query',1024); const shape = view(p.detail);
         try {
           const total = Number(this.get('SELECT count(*) AS n FROM notes_fts WHERE notes_fts MATCH ?', q)?.n);
-          const notes = this.all("SELECT n.*, snippet(notes_fts,3,'[',']','…',24) AS snippet FROM notes_fts JOIN notes n ON n.id=notes_fts.id WHERE notes_fts MATCH ? ORDER BY rank,n.id LIMIT ? OFFSET ?", q,limit,offset).map(row => ({...summary(toNote(row)),snippet:row.snippet}));
+          const notes = this.all("SELECT n.*, snippet(notes_fts,3,'[',']','…',24) AS snippet FROM notes_fts JOIN notes n ON n.id=notes_fts.id WHERE notes_fts MATCH ? ORDER BY rank,n.id LIMIT ? OFFSET ?", q,limit,offset).map(row => ({...shape(toNote(row)),snippet:row.snippet}));
           return {notes,total,offset,has_more: offset+notes.length < total};
         } catch (e) { if (e instanceof HiveNoteError) throw e; invalid('Invalid FTS5 query; use words, quoted phrases, or AND/OR/NOT (balanced quotes/parentheses)'); }
       }

@@ -12,11 +12,12 @@ const status = z.enum(['todo', 'doing', 'done', 'cancelled']);
 const kind = z.enum(['note', 'task']);
 const due = z.string().nullable();
 const page = { offset: integer.optional(), limit: z.number().int().positive().optional() };
+const detail = z.enum(['brief', 'full']).optional().describe("'brief' (default): id, name, description, kind, updated_at and task state. 'full': every stored field except content.");
 const operation = { op_id: z.string().min(1).optional().describe('Stable operation ID for safe mutation retries; generated if omitted.') };
 const schemas: Record<Method, z.ZodType> = {
-  list: z.object({ ...page, kind: kind.optional(), status: status.optional() }).strict(),
+  list: z.object({ ...page, kind: kind.optional(), status: status.optional(), detail }).strict(),
   read: z.object({ ids: z.array(id).min(1).optional(), names: z.array(z.string().min(1)).min(1).optional() }).strict().refine(p => (p.ids !== undefined) !== (p.names !== undefined), 'Use exactly one of ids or names'),
-  search: z.object({ query: z.string(), ...page }).strict(),
+  search: z.object({ query: z.string(), ...page, detail }).strict(),
   create: z.object({ id: id.optional(), name: z.string().min(1), description: z.string(), content: z.string(), kind: kind.optional(), metadata: metadata.optional(), status: status.optional(), due_at: due.optional(), ...operation }).strict(),
   edit: z.object({ id, old_str: z.string().min(1), new_str: z.string(), base_rev: revision.optional(), ...operation }).strict(),
   replace: z.object({ id, content: z.string().optional(), name: z.string().min(1).optional(), description: z.string().optional(), metadata: metadata.optional(), base_rev: revision, ...operation }).strict(),
@@ -31,7 +32,7 @@ const schemas: Record<Method, z.ZodType> = {
   update_task: z.object({ id, base_rev: revision, status: status.optional(), due_at: due.optional(), metadata: metadata.optional(), ...operation }).strict(),
 };
 const descriptions: Record<Method, string> = {
-  list: 'List paginated note/task summaries, not full content.',
+  list: 'List notes by name and description (brief by default) to decide what to read. No content.',
   read: 'Read full notes by a batch of IDs OR exact names. Missing selectors are reported.',
   search: 'Search notes with paginated matching summaries and snippets.',
   create: 'Create a note or task. Name is unique; content is literal data.',

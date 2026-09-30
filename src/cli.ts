@@ -17,7 +17,7 @@ interface LocalStore extends Store {
   backup(destination: string): { path: string } | Promise<{ path: string }>;
   close(): void;
 }
-const booleanFlags = new Set(['help', 'version', 'json', 'force']);
+const booleanFlags = new Set(['help', 'version', 'json', 'force', 'full']);
 const allowedFlags = new Set(['db', 'url', 'token-file', 'agent', 'session', 'timeout-ms', 'retries', 'params', 'op-id', 'id', 'ids', 'name', 'names', 'description', 'content', 'content-file', 'body', 'body-file', 'old-str', 'old-str-file', 'new-str', 'new-str-file', 'base-rev', 'rev', 'query', 'offset', 'limit', 'kind', 'status', 'due-at', 'metadata', 'since', 'ttl-seconds', 'device', 'scope', 'destination', 'host', 'port', ...booleanFlags]);
 function parse(argv: string[]): Arguments {
   const flags: Flags = new Map();
@@ -48,9 +48,9 @@ function parse(argv: string[]): Arguments {
 function flag(flags: Flags, name: string): string | undefined { return flags.get(name)?.at(-1); }
 const textFlags = ['content', 'content-file', 'body', 'body-file'];
 const methodFlags: Record<Method, string[]> = {
-  list: ['offset', 'limit', 'kind', 'status'],
+  list: ['offset', 'limit', 'kind', 'status', 'full'],
   read: ['id', 'ids', 'name', 'names'],
-  search: ['query', 'offset', 'limit'],
+  search: ['query', 'offset', 'limit', 'full'],
   create: ['id', 'name', 'description', 'kind', 'status', 'due-at', 'metadata', ...textFlags],
   edit: ['id', 'base-rev', 'old-str', 'old-str-file', 'new-str', 'new-str-file', ...textFlags],
   replace: ['id', 'base-rev', 'name', 'description', 'metadata', ...textFlags],
@@ -129,6 +129,7 @@ function parameters(method: Method, flags: Flags, positional: string[]): Params 
   const numbers = ['base-rev', 'rev', 'offset', 'limit', 'since', 'ttl-seconds'];
   for (const key of numbers) { const value = flag(flags, key); if (value !== undefined) set(key.replaceAll('-', '_'), number(value, `--${key}`)); }
   if (flags.has('force')) set('force', flag(flags, 'force') === 'true');
+  if (flag(flags, 'full') === 'true') set('detail', 'full');
   if (flags.has('due-at')) set('due_at', flag(flags, 'due-at') === 'null' ? null : flag(flags, 'due-at'));
   if (flags.has('metadata')) set('metadata', json(flag(flags, 'metadata')!, '--metadata'));
   if (flags.has('op-id')) set('op_id', flag(flags, 'op-id'));
