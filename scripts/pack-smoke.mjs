@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { readFile, rm, access } from 'node:fs/promises';
+import { readFile, rm, access, mkdir, copyFile } from 'node:fs/promises';
 import { sandbox, run, root, fixture } from '../tests/helpers.mjs';
 import { connectMcp, mcpSmoke } from '../tests/mcp-helpers.mjs';
 
@@ -14,10 +14,15 @@ async function checked(command, args, options = {}) {
   return result;
 }
 function npmJson(stdout) {
-  // npm 12 returns a name-keyed object; npm <=11 returns an array.
-  // Lifecycle messages are separate stderr on tested npm versions.
-  const value = JSON.parse(stdout);
-  return Array.isArray(value) ? value : Object.values(value);
+  // npm 12 returns a name-keyed object; older npm returns an array and may
+  // print lifecycle messages before JSON. Only consider column-zero roots.
+  for (const match of stdout.matchAll(/^(?:\{|\[)/gm)) {
+    try {
+      const value = JSON.parse(stdout.slice(match.index));
+      return Array.isArray(value) ? value : Object.values(value);
+    } catch { /* Try the next root following lifecycle output. */ }
+  }
+  throw new Error('npm pack did not return JSON inventory');
 }
 try {
   const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
@@ -25,6 +30,7 @@ try {
   const shipped = new Set(dry.files.map(file => file.path));
   for (const path of ['package.json', 'dist/cli.js', 'dist/client.js', 'dist/sqlite.js', 'dist/http.js', 'dist/mcp.js', 'README.md']) assert.ok(shipped.has(path), `Missing package file: ${path}`);
   assert.ok(!dry.files.some(file => /^(?:tests|\.tmp|src|node_modules)\//u.test(file.path)), 'Package must not ship fixtures, source or dependencies');
+  assert.ok(!dry.files.some(file => /(?:\.db(?:-|$)|\.sqlite(?:-|$)|\.env|credentials|\.log$)/iu.test(file.path)), 'Package must not ship databases, tokens, env or logs');
   const packed = npmJson((await checked('npm', ['pack', '--json', '--pack-destination', dir])).stdout)[0];
   const tarball = join(dir, packed.filename);
   await access(tarball);
@@ -45,7 +51,10 @@ try {
   await mcpSmoke(mcp.client, 'Installed MCP 日本語');
   await mcp.client.close();
   mcp = null;
-  console.log(JSON.stringify({ package: pkg.name, version: pkg.version, dry_run_files: dry.files.length, tarball_bytes: packed.size, installed_bin: 'help/version/create/read verified', paths: 'spaces and non-ASCII verified', mcp: 'actual SDK stdio handshake and all fifteen tools verified' }, null, 2));
+  const artifactDirectory = join(root, '.tmp', 'artifacts');
+  await mkdir(artifactDirectory, {recursive:true});
+  await copyFile(tarball, join(artifactDirectory, packed.filename));
+  console.log(JSON.stringify({ package: pkg.name, version: pkg.version, dry_run_files: dry.files.length, tarball_bytes: packed.size, artifact: `.tmp/artifacts/${packed.filename}`, installed_bin: 'help/version/create/read verified', paths: 'spaces and non-ASCII verified', mcp: 'actual SDK stdio handshake and all fifteen tools verified' }, null, 2));
 } finally {
   await mcp?.client.close();
   await rm(dir, { recursive: true, force: true });

@@ -87,6 +87,8 @@ export class SqliteStore implements Store {
   private db: DatabaseSync;
   readonly path: string;
   constructor(path: string, private actor: Actor = localActor()) {
+    // Direct filesystem clients may label themselves, but are not token-verified.
+    this.actor = { ...actor, verified: false };
     this.path = resolve(path);
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
     // Create with restrictive mode before SQLite opens it; independent creators may race.

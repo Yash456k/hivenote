@@ -24,7 +24,7 @@ const fail = (fn, status, code) => assert.rejects(fn, error => {
   assert.equal(created.note.content, original.content);
   assert.ok(created.op_id);
   assert.equal(created.note.last_attribution.principal, 'test-user');
-  assert.equal(created.note.last_attribution.verified, true);
+  assert.equal(created.note.last_attribution.verified, false); // Direct filesystem access is not token auth.
   const id = created.note.id;
   assert.deepEqual((await store.call('read', { names: [original.name, 'missing'] })).missing, ['missing']);
   assert.equal((await store.call('read', { ids: [id] })).notes[0].id, id);
@@ -177,6 +177,13 @@ test('task owner, force takeover, expiry, task updates and 20 contenders', async
   assert.equal(updated.note.status, 'done');
   assert.equal(updated.note.due_at, '2030-01-02T03:04:05.000Z');
   assert.deepEqual(updated.note.metadata, { command: 'do-not-execute', nested: { inert: true } });
+  store.execute('claim', params({ id }), actor('lease-owner'));
+  const forcedRelease = store.execute('release', params({ id, force: true }), actor('override-release'));
+  assert.equal(forcedRelease.note.claimed_by, null);
+  const audit = (await store.call('history', { id, limit: 100 })).events;
+  assert.ok(audit.some(event => event.kind === 'claim_force' && event.attribution.principal === 'override'));
+  assert.equal(audit.at(-1).kind, 'release_force');
+  assert.equal(audit.at(-1).attribution.principal, 'override-release');
   const plain = await store.call('create', fixture());
   await assert.rejects(store.call('claim', { id: plain.note.id }));
   await assert.rejects(store.call('update_task', { id: plain.note.id, base_rev: 1, status: 'done' }));

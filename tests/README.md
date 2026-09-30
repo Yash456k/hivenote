@@ -30,7 +30,9 @@ Coverage:
   authenticated attribution, read-only and revocation checks.
 - Ten independently initialized processes making 100 successful writes each
   against one fresh database; exact global event/revision counts and historical
-  snapshots. A separate 20-process optimistic race has exactly one winner.
+  snapshots. Another ten-process/100-edit run targets one shared note and
+  reconciles all 1000 contributions with rev=1001. A separate 20-process
+  optimistic race has exactly one winner.
 - Packaging smoke: dry-run inventory, real tarball installation into a temporary
   prefix, installed executable help/version/create/read, Unicode/space paths,
   and a real installed MCP exchange covering every tool.
@@ -38,7 +40,8 @@ Coverage:
 All fixture directories are created under `$TMPDIR` when set, otherwise repo
 `.tmp/`, and cleaned up even on failure. CLI config and npm install/cache state
 are sandboxed; no user database or global config is changed. Tests never require
-a fixed TCP port.
+a fixed TCP port. The packaging smoke retains the verified tarball in ignored
+`.tmp/artifacts/`; its disposable installation and database are removed.
 
 The benchmark creates exactly 300 bounded 1024-byte fixture notes and records
 nearest-rank p50/p95 wall-clock milliseconds for local and warm HTTP read/list/

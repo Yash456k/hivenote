@@ -172,7 +172,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   if (flags.has('help') || !positional.length) { process.stdout.write(HELP); return; }
   const requestedCommand = positional.shift()!;
   const command = requestedCommand === 'update-task' ? 'update_task' : requestedCommand;
-  const saved = loadConfig();
+  const saved = command === 'config' && positional[0] === 'reset' ? {} : loadConfig();
   const override = overrides(flags);
   if (command === 'config') {
     const action = positional.shift() ?? 'show';

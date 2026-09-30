@@ -26,6 +26,9 @@ export class StickyError extends Error {
 }
 export function isMethod(value: unknown): value is Method { return typeof value === 'string' && (METHODS as readonly string[]).includes(value); }
 export function clientParams(method: Method, params: Params = {}): Params {
+  if (!params || typeof params !== 'object' || Array.isArray(params) || ![Object.prototype, null].includes(Object.getPrototypeOf(params) as object|null)) {
+    throw new StickyError('validation_error', 'params must be a JSON object');
+  }
   const out: Params = MUTATIONS.has(method) && params.op_id === undefined ? {...params, op_id: randomUUID()} : {...params};
   if (method === 'create' && out.id === undefined && typeof out.op_id === 'string') {
     // Client-generated UUIDv8 derived from op_id: explicit CLI replay also preserves ID.

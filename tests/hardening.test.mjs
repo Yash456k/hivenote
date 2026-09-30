@@ -61,7 +61,7 @@ test('backup collision/permissions and read-only administration fail safely', as
   assert.throws(()=>store.backup(file),e=>e.status===409);
   assert.throws(()=>store.backup(path),e=>e.status===409);
   if(process.platform!=='win32') {
-    for(const candidate of [path,file]) assert.equal((await stat(candidate)).mode&0o777,0o600);
+    for(const candidate of [path,file,`${path}-wal`,`${path}-shm`]) assert.equal((await stat(candidate)).mode&0o777,0o600);
   }
   const ro=new SqliteStore(path,actor('reader','read-only','ro'));
   try {
@@ -124,6 +124,12 @@ test('token file must be private; invalid config and offline endpoint never fall
   }
   const bad=await run(process.execPath,[cli,'--db',join(dir,'never.db'),'--url','http://127.0.0.1:1','list'],{env});
   assert.notEqual(bad.code,0);
+  await cliJson(['config','set','--db',join(dir,'never.db')],{env});
+  await writeFile(join(home,'config.json'),'{broken');
+  const malformed=await run(process.execPath,[cli,'list'],{env});
+  assert.notEqual(malformed.code,0);
+  assert.match(malformed.stderr,/config/iu);
+  await cliJson(['config','reset'],{env});
   const offline=new HttpStore('http://127.0.0.1:1','x'.repeat(43),{timeoutMs:100,retries:1});
   await assert.rejects(offline.call('list'),e=>e.status===503);
   await assert.rejects(stat(join(home,'data.db')));
