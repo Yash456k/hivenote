@@ -44,7 +44,7 @@ test('read exposes bounded append bodies despite unchanged revision; empty CLI c
   assert.equal(read.updates.at(-1).body,'update-24');
   assert.equal(read.updates_has_more,true);
   const args=['--db',path,'create','repeat','--description','','--content','','--op-id','repeatable-create'];
-  const env={STICKY_HOME:join(dir,'config')};
+  const env={HIVENOTE_HOME:join(dir,'config')};
   const first=await cliJson(args,{env});
   assert.equal(first.note.content,'');
   assert.deepEqual(await cliJson(args,{env}),first);
@@ -104,16 +104,16 @@ test('admin methods denied over RPC; CLI local does not load MCP and remote does
   }
   const denyMcp=join(dir,'deny-mcp.mjs');
   await writeFile(denyMcp,"import {registerHooks} from 'node:module'; registerHooks({resolve(s,c,next){if(s.includes('@modelcontextprotocol/'))throw Error('MCP eager import');return next(s,c);}});");
-  const env={STICKY_HOME:join(dir,'isolated')};
+  const env={HIVENOTE_HOME:join(dir,'isolated')};
   const local=await run(process.execPath,['--import',denyMcp,cli,'--db',path,'list'],{env});
   assert.equal(local.code,0,local.stderr);
-  const remote=await run(process.execPath,['--no-experimental-sqlite',cli,'--url',url,'list'],{env:{...env,STICKY_TOKEN:token.token}});
+  const remote=await run(process.execPath,['--no-experimental-sqlite',cli,'--url',url,'list'],{env:{...env,HIVENOTE_TOKEN:token.token}});
   assert.equal(remote.code,0,remote.stderr);
 });
 test('token file must be private; invalid config and offline endpoint never fall back to local', async t => {
   const {dir}=await setup(t);
   const home=join(dir,'home');
-  const env={STICKY_HOME:home};
+  const env={HIVENOTE_HOME:home};
   const file=join(dir,'token.txt');
   await writeFile(file,'x'.repeat(43),{mode:0o644});
   if(process.platform!=='win32') {

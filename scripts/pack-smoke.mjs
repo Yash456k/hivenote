@@ -6,7 +6,7 @@ import { sandbox, run, root, fixture } from '../tests/helpers.mjs';
 import { connectMcp, mcpSmoke } from '../tests/mcp-helpers.mjs';
 
 const dir = await sandbox(null, 'pack-smoke');
-const env = { STICKY_HOME: join(dir, 'isolated config'), npm_config_cache: join(dir, 'npm-cache') };
+const env = { HIVENOTE_HOME: join(dir, 'isolated config'), npm_config_cache: join(dir, 'npm-cache') };
 let mcp;
 async function checked(command, args, options = {}) {
   const result = await run(command, args, { env, timeout: 180_000, ...options });
@@ -36,9 +36,9 @@ try {
   await access(tarball);
   const prefix = join(dir, 'installed prefix 日本語');
   await checked('npm', ['install', '--prefix', prefix, '--no-save', '--no-audit', '--no-fund', tarball]);
-  const bin = join(prefix, 'node_modules', '.bin', process.platform === 'win32' ? 'sticky.cmd' : 'sticky');
+  const bin = join(prefix, 'node_modules', '.bin', process.platform === 'win32' ? 'hivenote.cmd' : 'hivenote');
   const help = await checked(bin, ['--help'], { cwd: prefix });
-  assert.match(help.stdout, /sticky|usage/iu);
+  assert.match(help.stdout, /hivenote|usage/iu);
   const version = await checked(bin, ['--version'], { cwd: prefix });
   assert.ok(version.stdout.includes(pkg.version));
   const db = join(prefix, 'installed notes with spaces 日本語.sqlite');

@@ -1,5 +1,5 @@
 import * as http from 'node:http';
-import { isMethod, MUTATIONS, StickyError, type Actor, type Method, type Params } from './contract.js';
+import { isMethod, MUTATIONS, HiveNoteError, type Actor, type Method, type Params } from './contract.js';
 
 export interface ServerStore { authenticate(token: string): Actor; execute(method: Method, params: Params, actor: Actor): unknown; }
 export interface ServerOptions { host?: string; port?: number; dropResponseOnce?: boolean; }
@@ -12,7 +12,7 @@ function reply(response: http.ServerResponse, status: number, value: unknown): v
   response.end(JSON.stringify(value));
 }
 function failure(response: http.ServerResponse, error: unknown): void {
-  const e = error instanceof StickyError ? error : new StickyError('internal_error', 'Internal server error', 500);
+  const e = error instanceof HiveNoteError ? error : new HiveNoteError('internal_error', 'Internal server error', 500);
   reply(response, e.status, { error: { code: e.code, message: e.message, ...(e.details === undefined ? {} : { details: e.details }) } });
 }
 function body(request: http.IncomingMessage): Promise<unknown> {
@@ -27,7 +27,7 @@ function body(request: http.IncomingMessage): Promise<unknown> {
         settled = true;
         chunks.length = 0;
         // Drain rather than destroy: the caller must receive the JSON 413.
-        reject(new StickyError('body_too_large', 'Request exceeds 1 MiB', 413));
+        reject(new HiveNoteError('body_too_large', 'Request exceeds 1 MiB', 413));
         return;
       }
       chunks.push(chunk);
@@ -36,41 +36,41 @@ function body(request: http.IncomingMessage): Promise<unknown> {
       if (settled) return;
       settled = true;
       try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown); }
-      catch { reject(new StickyError('invalid_json', 'Invalid JSON request')); }
+      catch { reject(new HiveNoteError('invalid_json', 'Invalid JSON request')); }
     });
-    request.once('error', () => { if (!settled) { settled = true; reject(new StickyError('invalid_request', 'Request interrupted')); } });
-    request.once('aborted', () => { if (!settled) { settled = true; reject(new StickyError('invalid_request', 'Request interrupted')); } });
+    request.once('error', () => { if (!settled) { settled = true; reject(new HiveNoteError('invalid_request', 'Request interrupted')); } });
+    request.once('aborted', () => { if (!settled) { settled = true; reject(new HiveNoteError('invalid_request', 'Request interrupted')); } });
   });
 }
 export async function startServer(store: ServerStore, options: ServerOptions = {}): Promise<http.Server> {
   const host = options.host ?? '127.0.0.1';
   const port = options.port ?? 7391;
-  if (!host || !Number.isInteger(port) || port < 0 || port > 65535) throw new StickyError('invalid_config', 'Invalid server host or port');
+  if (!host || !Number.isInteger(port) || port < 0 || port > 65535) throw new HiveNoteError('invalid_config', 'Invalid server host or port');
   let drop = options.dropResponseOnce ?? false;
   const server = http.createServer({ requestTimeout: 15000, headersTimeout: 10000, keepAliveTimeout: 5000, maxHeaderSize: 16384 }, (request, response) => {
     void (async () => {
       if (request.method === 'GET' && request.url === '/health') { reply(response, 200, { ok: true }); return; }
-      if (request.method !== 'POST' || request.url !== '/v1/call') throw new StickyError('not_found', 'Not found', 404);
+      if (request.method !== 'POST' || request.url !== '/v1/call') throw new HiveNoteError('not_found', 'Not found', 404);
       // Authentication precedes parsing, authorization, and idempotency lookup.
       const authorization = request.headers.authorization;
-      if (!authorization || !/^Bearer [^\s]+$/u.test(authorization)) throw new StickyError('unauthorized', 'Bearer authentication required', 401);
+      if (!authorization || !/^Bearer [^\s]+$/u.test(authorization)) throw new HiveNoteError('unauthorized', 'Bearer authentication required', 401);
       const actor = { ...store.authenticate(authorization.slice(7)) };
-      if (request.headers['content-type']?.split(';')[0]?.trim().toLowerCase() !== 'application/json') throw new StickyError('unsupported_media_type', 'Content-Type must be application/json', 415);
+      if (request.headers['content-type']?.split(';')[0]?.trim().toLowerCase() !== 'application/json') throw new HiveNoteError('unsupported_media_type', 'Content-Type must be application/json', 415);
       const length = Number(request.headers['content-length'] ?? 0);
-      if (length > LIMIT) throw new StickyError('body_too_large', 'Request exceeds 1 MiB', 413);
+      if (length > LIMIT) throw new HiveNoteError('body_too_large', 'Request exceeds 1 MiB', 413);
       const input = await body(request);
-      if (!record(input) || Object.keys(input).some(key => !['method', 'params', 'agent', 'session'].includes(key)) || !isMethod(input.method)) throw new StickyError('invalid_request', 'Expected {method, params, agent?, session?}');
+      if (!record(input) || Object.keys(input).some(key => !['method', 'params', 'agent', 'session'].includes(key)) || !isMethod(input.method)) throw new HiveNoteError('invalid_request', 'Expected {method, params, agent?, session?}');
       const params = input.params === undefined ? {} : input.params;
       // Body parsing yields to other clients; a revocation during upload must still deny dispatch.
       Object.assign(actor, store.authenticate(authorization.slice(7)));
-      if (!record(params) || Object.keys(params).some(key => reserved.has(key))) throw new StickyError('invalid_params', 'Params must be an object without attribution fields');
+      if (!record(params) || Object.keys(params).some(key => reserved.has(key))) throw new HiveNoteError('invalid_params', 'Params must be an object without attribution fields');
       for (const label of ['agent', 'session'] as const) {
         if (input[label] !== undefined) {
-          if (typeof input[label] !== 'string' || !input[label].length || input[label].length > 256) throw new StickyError('invalid_request', `Invalid ${label} label`);
+          if (typeof input[label] !== 'string' || !input[label].length || input[label].length > 256) throw new HiveNoteError('invalid_request', `Invalid ${label} label`);
           actor[label] = input[label];
         }
       }
-      if (actor.scope !== 'rw' && MUTATIONS.has(input.method)) throw new StickyError('forbidden', 'Token is read-only', 403);
+      if (actor.scope !== 'rw' && MUTATIONS.has(input.method)) throw new HiveNoteError('forbidden', 'Token is read-only', 403);
       const result = store.execute(input.method, params, actor);
       if (drop && MUTATIONS.has(input.method)) { drop = false; response.destroy(); return; }
       reply(response, 200, { result });

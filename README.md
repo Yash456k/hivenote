@@ -1,6 +1,6 @@
-# Sticky Notes 0.1
+# HiveNote 0.1
 
-A database of shared memory and task data for agents. The name is provisional.
+A database of shared memory and task data for agents.
 Discover lightweight note names/descriptions, then batch-read relevant content.
 CLI, stdio MCP and authenticated HTTP share one application contract and one
 SQLite authority. Nothing executes note content or metadata.
@@ -17,44 +17,57 @@ Stability 1.1 / active development in [Node 24.0.0](https://nodejs.org/download/
 and emits an experimental warning to stderr. No SQLite flag or native npm addon
 is required. Windows/macOS-compatible source has not been tested on those OSes.
 
-The provisional package `@yash456k/sticky-notes@0.1.0` is **unpublished on npm**.
+The package `hivenote@0.1.0` is **unpublished on npm**.
 This GitHub repository is private. Installation from authorized GitHub source:
 
 ```sh
-git clone git@github.com:Yash456k/sticky-notes.git
-cd sticky-notes
+git clone git@github.com:Yash456k/hivenote.git
+cd hivenote
 npm ci
 npm run typecheck
 npm test
 npm pack
-npm install --prefix ./installation ./yash456k-sticky-notes-0.1.0.tgz
-./installation/node_modules/.bin/sticky --help
+npm install --prefix ./installation ./hivenote-0.1.0.tgz
+./installation/node_modules/.bin/hivenote --help
 ```
 
 Alternatively install an owner-provided tarball with the last two commands.
 A global tarball install is optional (`npm install -g ./PACKAGE.tgz`); npm registry
 publication is not required to install a tarball.
-In source development use `node dist/cli.js` in place of `sticky` below.
+In source development use `node dist/cli.js` in place of `hivenote` below.
 `npm pack` compiles first. The tarball includes compiled JS/types, docs and license,
 not source fixtures, credentials, databases or node_modules. On npm versions
 that require lifecycle approval, approve the trusted package's build scripts
 using your own package-manager policy; no global policy changes are required.
 
+## Renamed from the working title
+
+The project, npm package, CLI and MCP server are now **HiveNote** (`hivenote`).
+The old working-title environment variables become `HIVENOTE_HOME` and
+`HIVENOTE_TOKEN`; default data/config directories are named `hivenote`.
+Existing databases remain compatible: use `--db` with the old database path,
+or stop writers and use the previous CLI's `backup` command to create a
+consistent snapshot at the new data path. Never copy only a live WAL database
+file. Copy any explicit client configuration deliberately, updating paths;
+there is no automatic background migration. Historical note IDs, revisions,
+receipts and tokens remain valid. The legacy UUID derivation namespace is
+intentionally retained internally so operation retries keep their identity.
+
 ## Local use: no daemon
 
 ```sh
-sticky create build-context --description 'Current design decisions' --content-file design.txt
-sticky list --limit 20
-sticky read --names '["build-context","acceptance"]'
-sticky search 'design AND decisions'
-sticky edit NOTE_UUID --old-str 'old wording' --new-str 'new wording' --base-rev 1
-sticky replace NOTE_UUID --base-rev 2 --content-file - < replacement.txt
-sticky append NOTE_UUID --body-file progress.txt
-sticky history NOTE_UUID --limit 20
-sticky revision NOTE_UUID --rev 1
-sticky delete NOTE_UUID --base-rev 3
-sticky restore NOTE_UUID --rev 1 --base-rev 4
-sticky changes --since 0 --limit 100
+hivenote create build-context --description 'Current design decisions' --content-file design.txt
+hivenote list --limit 20
+hivenote read --names '["build-context","acceptance"]'
+hivenote search 'design AND decisions'
+hivenote edit NOTE_UUID --old-str 'old wording' --new-str 'new wording' --base-rev 1
+hivenote replace NOTE_UUID --base-rev 2 --content-file - < replacement.txt
+hivenote append NOTE_UUID --body-file progress.txt
+hivenote history NOTE_UUID --limit 20
+hivenote revision NOTE_UUID --rev 1
+hivenote delete NOTE_UUID --base-rev 3
+hivenote restore NOTE_UUID --rev 1 --base-rev 4
+hivenote changes --since 0 --limit 100
 ```
 
 All commands output JSON by default (`--json` is also accepted). Errors are JSON
@@ -76,11 +89,11 @@ by the common client unless explicitly supplied. Default page size is 50, max
 
 Default data paths are outside the installation:
 
-- Linux: `$XDG_DATA_HOME/sticky-notes/data.db` or `~/.local/share/sticky-notes/data.db`;
-  config under `$XDG_CONFIG_HOME/sticky-notes` or `~/.config/sticky-notes`.
-- macOS: `~/Library/Application Support/sticky-notes`.
-- Windows: data under `%LOCALAPPDATA%\sticky-notes`, config under `%APPDATA%\sticky-notes`.
-- `STICKY_HOME` overrides both directories; `--db PATH` selects an explicit database.
+- Linux: `$XDG_DATA_HOME/hivenote/data.db` or `~/.local/share/hivenote/data.db`;
+  config under `$XDG_CONFIG_HOME/hivenote` or `~/.config/hivenote`.
+- macOS: `~/Library/Application Support/hivenote`.
+- Windows: data under `%LOCALAPPDATA%\hivenote`, config under `%APPDATA%\hivenote`.
+- `HIVENOTE_HOME` overrides both directories; `--db PATH` selects an explicit database.
 
 **Keep the database, WAL and SHM on local disk only. Never put them on Dropbox,
 Syncthing, an SMB/NFS/network share or another synchronization service.** The
@@ -91,10 +104,10 @@ HTTP to that database's owner, not copies of its file.
 ## Inert tasks and concurrency
 
 ```sh
-sticky create release-check --kind task --description 'Acceptance checklist' --content-file checklist.txt
-sticky claim TASK_UUID --ttl-seconds 900
-sticky update-task TASK_UUID --base-rev 2 --status doing --due-at 2030-01-02T03:04:05Z
-sticky release TASK_UUID
+hivenote create release-check --kind task --description 'Acceptance checklist' --content-file checklist.txt
+hivenote claim TASK_UUID --ttl-seconds 900
+hivenote update-task TASK_UUID --base-rev 2 --status doing --due-at 2030-01-02T03:04:05Z
+hivenote release TASK_UUID
 ```
 
 Statuses: `todo`, `doing`, `done`, `cancelled`; `--due-at null` clears a due date.
@@ -120,30 +133,30 @@ Do not reuse an operation ID for a new intent.
 On the database-owner machine:
 
 ```sh
-sticky --db /path/on/local/disk/notes.db token create --device laptop --scope rw
-sticky --db /path/on/local/disk/notes.db token create --device observer --scope ro
-sticky --db /path/on/local/disk/notes.db token list
-sticky --db /path/on/local/disk/notes.db serve --port 7391
+hivenote --db /path/on/local/disk/notes.db token create --device laptop --scope rw
+hivenote --db /path/on/local/disk/notes.db token create --device observer --scope ro
+hivenote --db /path/on/local/disk/notes.db token list
+hivenote --db /path/on/local/disk/notes.db serve --port 7391
 ```
 
 Each create prints a new high-entropy token **once**, in a JSON `token` field.
 Store it privately (mode 0600 on POSIX); the database keeps only its SHA-256 hash.
-Avoid shared logs or shell-history secrets. A client may use `STICKY_TOKEN` or a
+Avoid shared logs or shell-history secrets. A client may use `HIVENOTE_TOKEN` or a
 private file; a configured token file takes precedence over the environment.
 Tokens/admin/backup/config are local-only, never RPC/MCP methods. Revoke locally
-with `sticky --db PATH token revoke CLIENT_UUID`; revocation also denies receipt
+with `hivenote --db PATH token revoke CLIENT_UUID`; revocation also denies receipt
 replays. `ro` can read all notes/history, `rw` can mutate all notes; there are no
 per-note ACLs or separate force-operation roles in v0.1.
 
 On a client device:
 
 ```sh
-sticky --url https://notes.example.com --token-file /private/token.txt list
-sticky config set --url https://notes.example.com --token-file /private/token.txt
-sticky read --names '["build-context"]'
-sticky config show
-sticky config reset
-sticky config set --db /path/on/local/disk/notes.db
+hivenote --url https://notes.example.com --token-file /private/token.txt list
+hivenote config set --url https://notes.example.com --token-file /private/token.txt
+hivenote read --names '["build-context"]'
+hivenote config show
+hivenote config reset
+hivenote config set --db /path/on/local/disk/notes.db
 ```
 
 URL must be an HTTP(S) origin without credentials, path, query or fragment.
@@ -169,8 +182,8 @@ Claude Desktop JSON example; replace the bin path with your installation:
 ```json
 {
   "mcpServers": {
-    "sticky": {
-      "command": "/absolute/installation/node_modules/.bin/sticky",
+    "hivenote": {
+      "command": "/absolute/installation/node_modules/.bin/hivenote",
       "args": ["--db", "/absolute/local/notes.db", "mcp"]
     }
   }
@@ -180,8 +193,8 @@ Claude Desktop JSON example; replace the bin path with your installation:
 Codex TOML example:
 
 ```toml
-[mcp_servers.sticky]
-command = "/absolute/installation/node_modules/.bin/sticky"
+[mcp_servers.hivenote]
+command = "/absolute/installation/node_modules/.bin/hivenote"
 args = ["--url", "https://notes.example.com", "--token-file", "/private/token.txt", "mcp"]
 ```
 
@@ -212,15 +225,14 @@ ingress:
   - service: http_status:404
 ```
 
-Run your existing named tunnel normally and manage its DNS yourself. Sticky
-Notes' Bearer token is still required. Cloudflare Access is not integrated; an
+Run your existing named tunnel normally and manage its DNS yourself. HiveNote' Bearer token is still required. Cloudflare Access is not integrated; an
 interactive Access login wall is incompatible with this headless client unless
 you independently provide a compatible transport. No Cloudflare account or
 authentication platform is provisioned here.
 
 ## Backups and limits
 
-`sticky --db PATH backup /new/private/backup.db` makes a consistent `VACUUM INTO`
+`hivenote --db PATH backup /new/private/backup.db` makes a consistent `VACUUM INTO`
 snapshot and checks SQLite integrity; existing destinations are refused. POSIX
 DB/backup/config permissions are restrictive. Windows requires the user's own
 ACLs. Backups include note history, immutable receipts and token hashes: treat

@@ -8,7 +8,7 @@ export const methodNames = ['list', 'read', 'search', 'create', 'edit', 'replace
 export async function connectMcp(command, args, env = {}) {
   const transport = new StdioClientTransport({ command, args, env: { ...process.env, ...env }, stderr: 'pipe' });
   let stderr = '';
-  const client = new Client({ name: 'sticky-regression-sdk', version: '1.0.0' }, { capabilities: {} });
+  const client = new Client({ name: 'hivenote-regression-sdk', version: '1.0.0' }, { capabilities: {} });
   await client.connect(transport);
   transport.stderr?.on('data', chunk => { stderr += chunk; });
   return { client, transport, stderr: () => stderr };

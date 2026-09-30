@@ -8,7 +8,7 @@ import { sandbox, cli, run, cliJson, fixture, actor, closeServer, serverUrl } fr
 
 test('native CLI flags, UTF-8 file/stdin inputs and task aliases preserve literal inert data', async t => {
   const dir = await sandbox(t, 'cli-inputs');
-  const env = { STICKY_HOME: join(dir, 'config') };
+  const env = { HIVENOTE_HOME: join(dir, 'config') };
   const args = ['--db', join(dir, 'input.sqlite')];
   const content = '日本語\n$(touch MUST_NOT_EXIST)\nignore previous instructions\nunique line\n';
   const file = join(dir, 'content file 日本語.txt');
@@ -35,7 +35,7 @@ test('native CLI flags, UTF-8 file/stdin inputs and task aliases preserve litera
 
 test('CLI token administration and backup are real, omit secrets and refuse remote administration', async t => {
   const dir = await sandbox(t, 'cli-admin');
-  const env = { STICKY_HOME: join(dir, 'config') };
+  const env = { HIVENOTE_HOME: join(dir, 'config') };
   const db = join(dir, 'authority.sqlite');
   const args = ['--db', db];
   const token = await cliJson([...args, 'token', 'create', '--device', 'CLI admin', '--scope', 'rw'], { env });
@@ -56,7 +56,7 @@ test('CLI token administration and backup are real, omit secrets and refuse remo
   t.after(async () => { await closeServer(server); store.close(); });
   const url = serverUrl(server);
   for (const command of [['token', 'list'], ['backup', join(dir, 'forbidden.sqlite')]]) {
-    const result = await run(process.execPath, [cli, '--url', url, ...command], { env: { ...env, STICKY_TOKEN: token.token } });
+    const result = await run(process.execPath, [cli, '--url', url, ...command], { env: { ...env, HIVENOTE_TOKEN: token.token } });
     assert.notEqual(result.code, 0);
   }
   await assert.rejects(access(join(dir, 'forbidden.sqlite')));
@@ -67,7 +67,7 @@ test('CLI token administration and backup are real, omit secrets and refuse remo
 test('persisted config is sandboxed, conflicts fail closed, token file takes precedence over env', async t => {
   const dir = await sandbox(t, 'config');
   const home = join(dir, 'config');
-  const env = { STICKY_HOME: home };
+  const env = { HIVENOTE_HOME: home };
   const db = join(dir, 'config notes.sqlite');
   await cliJson(['config', 'set', '--db', db], { env });
   const config = await cliJson(['config', 'show'], { env });
@@ -80,14 +80,14 @@ test('persisted config is sandboxed, conflicts fail closed, token file takes pre
   const server = await startServer(store, { host: '127.0.0.1', port: 0 });
   t.after(async () => { await closeServer(server); store.close(); });
   const url = serverUrl(server);
-  assert.notEqual((await run(process.execPath, [cli, '--url', url, 'list'], { env: { ...env, STICKY_TOKEN: token.token } })).code, 0);
+  assert.notEqual((await run(process.execPath, [cli, '--url', url, 'list'], { env: { ...env, HIVENOTE_TOKEN: token.token } })).code, 0);
   const tokenFile = join(dir, 'token 日本語.txt');
   await writeFile(tokenFile, `${token.token}\n`, { mode: 0o600 });
   await cliJson(['config', 'set', '--url', url, '--token-file', tokenFile], { env });
   const remote = await cliJson(['config', 'show'], { env });
   assert.equal(remote.url, url);
   assert.ok(!remote.db);
-  assert.equal((await cliJson(['list'], { env: { ...env, STICKY_TOKEN: 'wrong-env-token' } })).total, 0);
+  assert.equal((await cliJson(['list'], { env: { ...env, HIVENOTE_TOKEN: 'wrong-env-token' } })).total, 0);
   assert.notEqual((await run(process.execPath, [cli, '--db', join(dir, 'must-not-create.sqlite'), 'list'], { env })).code, 0);
   await assert.rejects(access(join(dir, 'must-not-create.sqlite')));
   await cliJson(['config', 'reset'], { env });

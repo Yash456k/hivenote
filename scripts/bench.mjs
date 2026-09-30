@@ -47,7 +47,7 @@ try {
   for (const [method, params] of Object.entries(operations)) {
     measurements[`local_${method}`] = await measure(() => store.call(method, params), 100);
     measurements[`warm_http_${method}`] = await measure(() => remote.call(method, params), 100);
-    measurements[`cold_cli_${method}`] = await measure(() => cliJson(['--db', db, method, '--params', JSON.stringify(params)], { env: { STICKY_HOME: join(dir, 'config') } }), 10, 0);
+    measurements[`cold_cli_${method}`] = await measure(() => cliJson(['--db', db, method, '--params', JSON.stringify(params)], { env: { HIVENOTE_HOME: join(dir, 'config') } }), 10, 0);
   }
   measurements.local_append = await measure(() => store.call('append', { id: ids[0], body: 'bounded benchmark activity' }), 100);
   measurements.warm_http_append = await measure(() => remote.call('append', { id: ids[1], body: 'bounded benchmark activity' }), 100);

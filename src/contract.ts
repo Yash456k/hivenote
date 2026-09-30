@@ -21,16 +21,17 @@ export interface Event {
   seq: number; note_id: string; kind: string; revision: number|null;
   snapshot: Note|null; body: string|null; op_id: string; attribution: Attribution; timestamp: string;
 }
-export class StickyError extends Error {
-  constructor(public code: string, message: string, public status = 400, public details?: unknown) { super(message); this.name = 'StickyError'; }
+export class HiveNoteError extends Error {
+  constructor(public code: string, message: string, public status = 400, public details?: unknown) { super(message); this.name = 'HiveNoteError'; }
 }
 export function isMethod(value: unknown): value is Method { return typeof value === 'string' && (METHODS as readonly string[]).includes(value); }
 export function clientParams(method: Method, params: Params = {}): Params {
   if (!params || typeof params !== 'object' || Array.isArray(params) || ![Object.prototype, null].includes(Object.getPrototypeOf(params) as object|null)) {
-    throw new StickyError('validation_error', 'params must be a JSON object');
+    throw new HiveNoteError('validation_error', 'params must be a JSON object');
   }
   const out: Params = MUTATIONS.has(method) && params.op_id === undefined ? {...params, op_id: randomUUID()} : {...params};
   if (method === 'create' && out.id === undefined && typeof out.op_id === 'string') {
+    // Keep the pre-rename UUID namespace so existing operation retries retain their IDs.
     // Client-generated UUIDv8 derived from op_id: explicit CLI replay also preserves ID.
     const hash = createHash('sha256').update('sticky-notes:create:' + out.op_id).digest('hex');
     const variant = ((parseInt(hash[16]!, 16) & 3) | 8).toString(16);
@@ -54,5 +55,5 @@ export function clientParams(method: Method, params: Params = {}): Params {
  release {id,force?:boolean,base_rev?,op_id}
  update_task {id,base_rev,status?,due_at?:ISO|null,metadata?,op_id}
  Every mutation returns immutable {note:Note,event_seq:number,op_id:string}; append leaves rev unchanged.
- All errors StickyError; conflict 409 details {current:Note}. Metadata/references inert.
+ All errors HiveNoteError; conflict 409 details {current:Note}. Metadata/references inert.
  */

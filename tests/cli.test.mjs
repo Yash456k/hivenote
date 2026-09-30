@@ -43,10 +43,10 @@ async function exercise(args, env) {
 test('real local CLI subprocesses implement every operation, errors and paths with spaces/non-ASCII', { timeout: 120_000 }, async t => {
   const dir = await sandbox(t, 'cli-local');
   const db = join(dir, 'notes with spaces 日本語.sqlite');
-  const env = { STICKY_HOME: join(dir, 'isolated config') };
+  const env = { HIVENOTE_HOME: join(dir, 'isolated config') };
   const help = await run(process.execPath, [cli, '--help'], { env });
   assert.equal(help.code, 0, help.stderr);
-  assert.match(help.stdout, /sticky|usage/iu);
+  assert.match(help.stdout, /hivenote|usage/iu);
   const version = await run(process.execPath, [cli, '--version'], { env });
   assert.equal(version.code, 0, version.stderr);
   assert.match(version.stdout, /0\.1\.0/u);
@@ -63,14 +63,14 @@ test('real remote CLI subprocesses use authenticated HTTP and never create a loc
   t.after(async () => { await closeServer(server); store.close(); });
   const url = serverUrl(server);
   const configHome = join(dir, 'remote config');
-  const env = { STICKY_HOME: configHome, STICKY_TOKEN: token.token };
+  const env = { HIVENOTE_HOME: configHome, HIVENOTE_TOKEN: token.token };
   const created = await exercise(['--url', url], env);
   assert.equal(created.note.last_attribution.principal, token.principal);
   assert.equal(created.note.last_attribution.verified, true);
   await assert.rejects(access(join(configHome, 'data.db')));
-  const missing = await run(process.execPath, [cli, '--url', url, 'list'], { env: { ...env, STICKY_TOKEN: '' } });
+  const missing = await run(process.execPath, [cli, '--url', url, 'list'], { env: { ...env, HIVENOTE_TOKEN: '' } });
   assert.notEqual(missing.code, 0);
-  const forbidden = await run(process.execPath, [cli, '--url', url, 'create', '--params', JSON.stringify(fixture())], { env: { ...env, STICKY_TOKEN: ro.token } });
+  const forbidden = await run(process.execPath, [cli, '--url', url, 'create', '--params', JSON.stringify(fixture())], { env: { ...env, HIVENOTE_TOKEN: ro.token } });
   assert.notEqual(forbidden.code, 0);
   const conflictingMode = await run(process.execPath, [cli, '--url', url, '--db', join(dir, 'must not exist.sqlite'), 'list'], { env });
   assert.notEqual(conflictingMode.code, 0);

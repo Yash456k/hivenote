@@ -2,7 +2,7 @@ import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { randomUUID, randomBytes, createHash } from 'node:crypto';
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, unlinkSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { clientParams, isMethod, MUTATIONS, StickyError, type Actor, type Attribution, type Event, type Method, type Note, type Params, type Store } from './contract.js';
+import { clientParams, isMethod, MUTATIONS, HiveNoteError, type Actor, type Attribution, type Event, type Method, type Note, type Params, type Store } from './contract.js';
 
 type Row = Record<string, unknown>;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -17,7 +17,7 @@ const FIELDS: Record<Method, string[]> = {
   update_task: ['id','status','due_at','metadata','base_rev','op_id'],
 };
 export function localActor(): Actor { return { principal: 'local', device: 'local', scope: 'rw', verified: false }; }
-function invalid(message: string): never { throw new StickyError('validation_error', message); }
+function invalid(message: string): never { throw new HiveNoteError('validation_error', message); }
 function text(value: unknown, label: string, max: number, empty = false): string {
   if (typeof value !== 'string' || (!empty && !value.trim()) || /[\uD800-\uDFFF]/u.test(value) || Buffer.byteLength(value, 'utf8') > max || value.includes('\0')) invalid(`${label} must be ${empty ? 'a' : 'a nonempty'} well-formed UTF-8 string of at most ${max} bytes, without NUL`);
   return value;
@@ -65,11 +65,11 @@ function attribution(actor: Actor): Attribution {
   return out;
 }
 function safeSqlError(e: unknown): never {
-  if (e instanceof StickyError) throw e;
+  if (e instanceof HiveNoteError) throw e;
   const message = e instanceof Error ? e.message : '';
-  if (/UNIQUE constraint failed/iu.test(message)) throw new StickyError('conflict', 'ID or live name already exists', 409);
-  if (/locked|busy/iu.test(message)) throw new StickyError('busy', 'Database busy; retry with the same op_id', 503);
-  throw new StickyError('storage_error', 'Database operation failed', 500);
+  if (/UNIQUE constraint failed/iu.test(message)) throw new HiveNoteError('conflict', 'ID or live name already exists', 409);
+  if (/locked|busy/iu.test(message)) throw new HiveNoteError('busy', 'Database busy; retry with the same op_id', 503);
+  throw new HiveNoteError('storage_error', 'Database operation failed', 500);
 }
 function busy<T>(fn: () => T): T {
   const end = Date.now() + 5000;
@@ -105,7 +105,7 @@ export class SqliteStore implements Store {
       busy(() => this.db.exec('PRAGMA journal_mode=WAL;'));
       this.transaction(() => {
         const version = Number(this.get('PRAGMA user_version')?.user_version);
-        if (version > 1) throw new StickyError('schema_version', 'Database schema is newer than this program', 500);
+        if (version > 1) throw new HiveNoteError('schema_version', 'Database schema is newer than this program', 500);
         if (version === 0) {
           this.db.exec(`
             CREATE TABLE notes (
@@ -151,7 +151,7 @@ export class SqliteStore implements Store {
     if (!isMethod(method)) invalid('Unknown method');
     if (!params || typeof params !== 'object' || Array.isArray(params) || ![Object.prototype, null].includes(Object.getPrototypeOf(params) as object|null)) invalid('params must be a JSON object');
     if (Object.keys(params).some(k => !FIELDS[method].includes(k))) invalid(`Unknown parameter for ${method}`);
-    if (actor.scope !== 'rw' && MUTATIONS.has(method)) throw new StickyError('forbidden', 'Actor is read-only', 403);
+    if (actor.scope !== 'rw' && MUTATIONS.has(method)) throw new HiveNoteError('forbidden', 'Actor is read-only', 403);
     if (MUTATIONS.has(method)) {
       const op = text(params.op_id, 'op_id', 128);
       const request = JSON.stringify(json({ method, params }));
@@ -161,7 +161,7 @@ export class SqliteStore implements Store {
         actor = this.authorize(actor, true);
         const receipt = this.get('SELECT * FROM receipts WHERE op_id=?', op);
         if (receipt) {
-          if (receipt.principal !== actor.principal || receipt.request !== request) throw new StickyError('op_id_conflict', 'op_id already used for a different principal or request', 409);
+          if (receipt.principal !== actor.principal || receipt.request !== request) throw new HiveNoteError('op_id_conflict', 'op_id already used for a different principal or request', 409);
           return JSON.parse(receipt.response as string) as unknown;
         }
         const result = this.mutate(method, params, attribution(actor));
@@ -174,17 +174,17 @@ export class SqliteStore implements Store {
   private authorize(actor: Actor, write: boolean): Actor {
     if (!actor.verified) return actor;
     const row = this.get('SELECT principal,device,scope FROM clients WHERE principal=? AND revoked=0', actor.principal);
-    if (!row) throw new StickyError('unauthorized', 'Invalid or revoked token', 401);
-    if (write && row.scope !== 'rw') throw new StickyError('forbidden', 'Token is read-only', 403);
+    if (!row) throw new HiveNoteError('unauthorized', 'Invalid or revoked token', 401);
+    if (write && row.scope !== 'rw') throw new HiveNoteError('forbidden', 'Token is read-only', 403);
     return { ...actor, principal: row.principal as string, device: row.device as string, scope: row.scope as 'ro'|'rw' };
   }
   private find(noteId: unknown, deleted = false): Note {
     const key = id(noteId);
     const row = this.get(`SELECT * FROM notes WHERE id=?${deleted ? '' : ' AND deleted_at IS NULL'}`, key);
-    if (!row) throw new StickyError('not_found', 'Note not found', 404);
+    if (!row) throw new HiveNoteError('not_found', 'Note not found', 404);
     return toNote(row);
   }
-  private conflict(note: Note, message: string): never { throw new StickyError('conflict', message, 409, { current: note }); }
+  private conflict(note: Note, message: string): never { throw new HiveNoteError('conflict', message, 409, { current: note }); }
   private base(note: Note, params: Params, optional = false): void {
     if (optional && params.base_rev === undefined) return;
     if (integer(params.base_rev, 'base_rev', 1) !== note.rev) this.conflict(note, 'Revision mismatch; read current note before retrying');
@@ -198,7 +198,7 @@ export class SqliteStore implements Store {
   }
   private historical(note: Note, rev: unknown): Note {
     const row = this.get('SELECT snapshot FROM events WHERE note_id=? AND revision=?', note.id, integer(rev, 'rev', 1));
-    if (!row) throw new StickyError('not_found', 'Revision not found', 404);
+    if (!row) throw new HiveNoteError('not_found', 'Revision not found', 404);
     return JSON.parse(row.snapshot as string) as Note;
   }
   private mutate(method: Method, p: Params, who: Attribution): {note: Note; event_seq: number; op_id: string} {
@@ -323,7 +323,7 @@ export class SqliteStore implements Store {
           const total = Number(this.get('SELECT count(*) AS n FROM notes_fts WHERE notes_fts MATCH ?', q)?.n);
           const notes = this.all("SELECT n.*, snippet(notes_fts,3,'[',']','…',24) AS snippet FROM notes_fts JOIN notes n ON n.id=notes_fts.id WHERE notes_fts MATCH ? ORDER BY rank,n.id LIMIT ? OFFSET ?", q,limit,offset).map(row => ({...summary(toNote(row)),snippet:row.snippet}));
           return {notes,total,offset,has_more: offset+notes.length < total};
-        } catch (e) { if (e instanceof StickyError) throw e; invalid('Invalid FTS5 query; use words, quoted phrases, or AND/OR/NOT (balanced quotes/parentheses)'); }
+        } catch (e) { if (e instanceof HiveNoteError) throw e; invalid('Invalid FTS5 query; use words, quoted phrases, or AND/OR/NOT (balanced quotes/parentheses)'); }
       }
       case 'history': {
         const note = this.find(p.id,true); const {limit,offset} = this.page(p);
@@ -343,31 +343,31 @@ export class SqliteStore implements Store {
     }
   }
   tokenCreate(device: string, scope: 'ro'|'rw' = 'rw'): {id:string; principal:string; device:string; scope:'ro'|'rw'; token:string} {
-    if (this.actor.scope !== 'rw') throw new StickyError('forbidden','Read-only actor cannot administer tokens',403);
+    if (this.actor.scope !== 'rw') throw new HiveNoteError('forbidden','Read-only actor cannot administer tokens',403);
     text(device,'device',256); if (scope !== 'ro' && scope !== 'rw') invalid('scope must be ro or rw');
     const token = randomBytes(32).toString('base64url'); const key = randomUUID(); const principal = randomUUID();
     this.transaction(() => this.run('INSERT INTO clients(id,principal,device,token_hash,scope,created_at) VALUES(?,?,?,?,?,?)',key,principal,device,createHash('sha256').update(token).digest('hex'),scope,new Date().toISOString()));
     return {id:key,principal,device,scope,token};
   }
   tokenList(): Row[] {
-    if (this.actor.scope !== 'rw') throw new StickyError('forbidden','Token administration is local read/write only',403);
+    if (this.actor.scope !== 'rw') throw new HiveNoteError('forbidden','Token administration is local read/write only',403);
     return this.all('SELECT id,principal,device,scope,revoked,created_at,revoked_at FROM clients ORDER BY created_at,id');
   }
   tokenRevoke(key: string): void {
-    if (this.actor.scope !== 'rw') throw new StickyError('forbidden','Read-only actor cannot administer tokens',403);
+    if (this.actor.scope !== 'rw') throw new HiveNoteError('forbidden','Read-only actor cannot administer tokens',403);
     id(key);
-    this.transaction(() => { const result = this.run('UPDATE clients SET revoked=1,revoked_at=coalesce(revoked_at,?) WHERE id=?',new Date().toISOString(),key); if (!result.changes) throw new StickyError('not_found','Client not found',404); });
+    this.transaction(() => { const result = this.run('UPDATE clients SET revoked=1,revoked_at=coalesce(revoked_at,?) WHERE id=?',new Date().toISOString(),key); if (!result.changes) throw new HiveNoteError('not_found','Client not found',404); });
   }
   authenticate(token: string): Actor {
-    if (typeof token !== 'string' || token.length < 40 || token.length > 256) throw new StickyError('unauthorized','Invalid or revoked token',401);
+    if (typeof token !== 'string' || token.length < 40 || token.length > 256) throw new HiveNoteError('unauthorized','Invalid or revoked token',401);
     const row = this.get('SELECT principal,device,scope FROM clients WHERE token_hash=? AND revoked=0',createHash('sha256').update(token).digest('hex'));
-    if (!row) throw new StickyError('unauthorized','Invalid or revoked token',401);
+    if (!row) throw new HiveNoteError('unauthorized','Invalid or revoked token',401);
     return {principal:row.principal as string,device:row.device as string,scope:row.scope as 'ro'|'rw',verified:true};
   }
   backup(destination: string): {path: string} {
-    if (this.actor.scope !== 'rw') throw new StickyError('forbidden','Backup requires local read/write access',403);
+    if (this.actor.scope !== 'rw') throw new HiveNoteError('forbidden','Backup requires local read/write access',403);
     const path = resolve(text(destination,'destination',4096));
-    if (existsSync(path)) throw new StickyError('conflict','Backup destination already exists; choose a new path',409);
+    if (existsSync(path)) throw new HiveNoteError('conflict','Backup destination already exists; choose a new path',409);
     mkdirSync(dirname(path),{recursive:true,mode:0o700});
     // Reserve filename atomically and keep mode 0600 while VACUUM INTO fills empty file.
     const fd = openSync(path,'wx',0o600); closeSync(fd);
@@ -375,7 +375,7 @@ export class SqliteStore implements Store {
       this.run('VACUUM INTO ?',path);
       if (process.platform !== 'win32') chmodSync(path,0o600);
       const check = new DatabaseSync(path,{readOnly:true});
-      try { const row = check.prepare('PRAGMA integrity_check').get(); if (row?.integrity_check !== 'ok') throw new StickyError('backup_error','Backup integrity check failed',500); }
+      try { const row = check.prepare('PRAGMA integrity_check').get(); if (row?.integrity_check !== 'ok') throw new HiveNoteError('backup_error','Backup integrity check failed',500); }
       finally { check.close(); }
     } catch(e) { unlinkSync(path); safeSqlError(e); }
     return {path};

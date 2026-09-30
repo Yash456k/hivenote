@@ -8,7 +8,7 @@ import { connectMcp, methodNames } from './mcp-helpers.mjs';
 async function setup(t) {
   const dir = await sandbox(t, 'review-cli');
   const db = join(dir, 'notes.sqlite');
-  const env = { STICKY_HOME: join(dir, 'config') };
+  const env = { HIVENOTE_HOME: join(dir, 'config') };
   const args = ['--db', db];
   return {
     db, dir, env,

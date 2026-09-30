@@ -14,7 +14,7 @@ export const fixture = (extra = {}) => ({ id: randomUUID(), name: `note-${random
 export async function sandbox(t, label = 'test') {
   const base = process.env.TMPDIR || join(root, '.tmp');
   await mkdir(base, { recursive: true });
-  const dir = await mkdtemp(join(base, `sticky-${label}-`));
+  const dir = await mkdtemp(join(base, `hivenote-${label}-`));
   t?.after(() => rm(dir, { recursive: true, force: true }));
   return dir;
 }

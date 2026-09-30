@@ -90,12 +90,12 @@ installation were rerun on both runtimes after those corrections:
 ## Packed artifact
 
 `pack-smoke.mjs` runs real `npm pack --dry-run --json`, creates the tarball,
-installs it into a disposable prefix, invokes the installed `sticky` executable
+installs it into a disposable prefix, invokes the installed `hivenote` executable
 (help/version/create/read), then runs an actual installed MCP stdio exchange
 covering all fifteen tools. Unicode/space paths are exercised. It checks the
 allowlisted inventory excludes source tests, temp files, databases, env and logs.
 It retains the tested tarball at ignored
-`.tmp/artifacts/yash456k-sticky-notes-0.1.0.tgz` and removes the disposable install.
+`.tmp/artifacts/hivenote-0.1.0.tgz` and removes the disposable install.
 
 The final tarball inventory/size are printed by the final smoke run rather than
 hardcoded here (this document itself is part of the tarball). Package-lock is
