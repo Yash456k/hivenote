@@ -29,7 +29,8 @@ export interface WaitResult {
   updates: Event[];
 }
 
-export const WAIT_DEFAULTS = { timeoutSeconds: 600, intervalMs: 1000 } as const;
+/** 9 minutes: finishes before the 10-minute ceiling agents such as Claude Code put on one command. */
+export const WAIT_DEFAULTS = { timeoutSeconds: 540, intervalMs: 1000 } as const;
 
 interface ReadResult { notes: Note[]; updates: Event[] }
 

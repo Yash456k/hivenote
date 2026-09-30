@@ -226,7 +226,7 @@ Edit:     edit ID --old-str TEXT --new-str TEXT [--base-rev N]
 Replace:  replace ID --base-rev N --content-file PATH
 Append:   append ID --body TEXT
 List:     list [--kind task] [--status S] [--full]   (brief: name + description by default)
-Wait:     wait --name NAME|--id ID [--status done] [--timeout-seconds 600|0] [--interval-ms 1000]
+Wait:     wait --name NAME|--id ID [--status done] [--timeout-seconds 540|0] [--interval-ms 1000]
 Content:  --content-file / --body-file / --new-str-file accept '-' for UTF-8 stdin.
 Mutations: --op-id ID; all methods accept --params JSON.
 Tokens:   token create --device LABEL [--scope ro|rw]; token revoke ID

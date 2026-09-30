@@ -61,11 +61,11 @@ When you finish a task, **append what you did, then set it to done**, so whoever
 To wait for another agent to finish:
 
 ```sh
-hivenote wait --name build-api --status done     # blocks up to 10 minutes, then prints the note and its progress
+hivenote wait --name build-api --status done     # blocks up to 9 minutes, then prints the note and its progress
 hivenote wait --name build-api                   # wakes on any change or appended progress
 ```
 
-A timeout exits with an error. Tell the user rather than waiting again and again.
+Run `wait` in the **foreground**, not as a background job, and give the command a time limit of at least 10 minutes (in Claude Code, a Bash `timeout` of 600000). A background wait is lost if your session ends first. A timeout exits with an error; tell the user rather than waiting again and again.
 
 ## Rules
 
