@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>HiveNote</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cellipse cx='32' cy='36' rx='22' ry='18' fill='%23FFCD3C' stroke='%233A2A10' stroke-width='3'/%3E%3Crect x='19' y='19' width='5' height='35' rx='2' fill='%233A2A10'/%3E%3Crect x='28' y='18' width='5' height='37' rx='2' fill='%233A2A10'/%3E%3Ccircle cx='41' cy='33' r='2.6' fill='%233A2A10'/%3E%3Ccircle cx='48' cy='33' r='2.4' fill='%233A2A10'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="app.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <div class="sky" id="sky" aria-hidden="true"></div>
+
+  <header class="top">
+    <div class="brand">
+      <span class="brand-bee" id="brand-bee"></span>
+      <div>
+        <h1>HiveNote</h1>
+        <p class="where" id="where"></p>
+      </div>
+    </div>
+    <input class="search" id="search" type="search" placeholder="Search the hive" autocomplete="off" aria-label="Search notes">
+    <div class="status">
+      <span class="stat" id="stats"></span>
+      <span class="pill" id="live" data-state="connecting"><i></i><span>Connecting</span></span>
+    </div>
+  </header>
+
+  <main class="hive" id="hive" hidden>
+    <div class="main-column">
+      <section class="notes" aria-labelledby="notes-title">
+        <div class="section-head">
+          <h2 id="notes-title">Notes</h2>
+          <span class="hint-text">Drag to arrange. Only your view changes.</span>
+        </div>
+        <div class="masonry" id="notes"></div>
+      </section>
+
+      <section class="panel board" aria-labelledby="board-title">
+        <div class="section-head">
+          <h2 id="board-title">Tasks</h2>
+          <span class="chip" id="task-count"></span>
+        </div>
+        <div class="columns">
+          <div class="column" data-column="todo"><h3>To do</h3><div class="stack"></div></div>
+          <div class="column" data-column="doing"><h3>Doing</h3><div class="stack"></div></div>
+          <div class="column" data-column="done"><h3>Done</h3><div class="stack"></div></div>
+        </div>
+      </section>
+    </div>
+
+    <aside class="panel buzz" aria-labelledby="buzz-title">
+      <div class="section-head">
+        <h2 id="buzz-title">Buzz</h2>
+        <span class="chip">live</span>
+      </div>
+      <ol class="feed" id="feed"></ol>
+    </aside>
+  </main>
+
+  <section class="connect" id="connect" hidden>
+    <div class="connect-card">
+      <span class="connect-bee" id="connect-bee"></span>
+      <h2>Connect to your hive</h2>
+      <p id="connect-why">This hive is on another machine, so it needs a token once. This browser remembers it.</p>
+      <form id="connect-form">
+        <input id="token" type="password" placeholder="Token" autocomplete="off" spellcheck="false" required>
+        <button type="submit">Connect</button>
+      </form>
+      <p class="hint">On the machine running HiveNote, create one with<br><code>hivenote token create --device browser --scope ro</code></p>
+    </div>
+  </section>
+
+  <dialog class="reader" id="reader">
+    <article>
+      <header>
+        <div>
+          <p class="reader-kind" id="reader-kind"></p>
+          <h2 id="reader-name"></h2>
+          <p class="reader-description" id="reader-description"></p>
+        </div>
+        <button class="close" id="reader-close" aria-label="Close">×</button>
+      </header>
+      <pre class="reader-content" id="reader-content"></pre>
+      <h3 class="reader-updates-title" id="reader-updates-title">Progress</h3>
+      <ol class="reader-updates" id="reader-updates"></ol>
+    </article>
+  </dialog>
+</body>
+</html>

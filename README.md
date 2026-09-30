@@ -200,6 +200,21 @@ CORS. `agent`/`session` are unverified labels (`labels_verified:false`);
 `verified:true` applies only to token principal/device. Local attribution is
 `verified:false`. No automatic native agent/session identity inference.
 
+## Dashboard
+
+```sh
+hivenote ui            # opens http://127.0.0.1:7391 in your browser
+```
+
+A live, read-only view of the hive: notes as rearrangeable cards (the order is
+saved in your browser only and never affects agents), the task board, and a
+feed of what each agent is doing, refreshed every two seconds. `hivenote ui`
+lets this machine's browser read without a token; writes are never allowed
+from the page. `hivenote serve` also serves the dashboard at `/`, and there
+every viewer pastes a token once (`hivenote token create --device browser
+--scope ro`), which that browser remembers. Requests relayed by a proxy or
+tunnel always need a token.
+
 ## Agent skill
 
 [`skills/hivenote/SKILL.md`](skills/hivenote/SKILL.md) teaches an agent to use

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { SqliteStore } from '../dist/sqlite.js';
 import { isSupportedNode, MINIMUM_NODE } from '../dist/runtime.js';
+import { spawn } from 'node:child_process';
 import { cli, cliJson, fixture, run, sandbox } from './helpers.mjs';
 
 test('list and search return brief entries by default and full summaries on request', async t => {
@@ -109,4 +110,30 @@ test('edits and replacements that change nothing are rejected instead of creatin
   await assert.rejects(store.call('replace', { id: note.id, base_rev: 1, content: 'fix pending' }), error => error.code === 'validation_error');
   const [current] = (await store.call('read', { ids: [note.id] })).notes;
   assert.equal(current.rev, 1);
+});
+
+test('hivenote ui serves the dashboard and lets this machine read without a token, never write', async t => {
+  const db = join(await sandbox(t, 'ui'), 'notes.db');
+  await cliJson(['--db', db, 'create', 'context', '--description', 'Shared context']);
+  const child = spawn(process.execPath, [cli, '--db', db, 'ui', '--no-open', '--port', '0']);
+  t.after(() => child.kill());
+  const { dashboard } = await new Promise((resolve, reject) => {
+    child.stdout.once('data', chunk => resolve(JSON.parse(String(chunk))));
+    child.once('exit', code => reject(new Error(`ui exited with ${code}`)));
+  });
+  const page = await fetch(dashboard);
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get('content-security-policy'), /default-src 'none'/u);
+  assert.match(await page.text(), /HiveNote/u);
+
+  const call = (method, params, headers = {}) => fetch(new URL('/v1/call', dashboard), {
+    method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ method, params }),
+  });
+  const listed = await (await call('list', {})).json();
+  assert.equal(listed.result.notes[0].name, 'context');
+  const recent = await (await call('changes', { tail: 5 })).json();
+  assert.equal(recent.result.events.length, 1);
+  assert.equal((await call('create', { name: 'nope', description: '', content: '' })).status, 403);
+  // Anything relayed by a proxy or tunnel still needs a token.
+  assert.equal((await call('list', {}, { 'x-forwarded-for': '203.0.113.9' })).status, 401);
 });

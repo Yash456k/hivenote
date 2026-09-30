@@ -12,7 +12,7 @@ const FIELDS: Record<Method, string[]> = {
   create: ['id','name','description','content','kind','metadata','status','due_at','op_id'],
   edit: ['id','old_str','new_str','base_rev','op_id'], replace: ['id','content','name','description','metadata','base_rev','op_id'],
   append: ['id','body','op_id'], delete: ['id','base_rev','op_id'], history: ['id','offset','limit'],
-  revision: ['id','rev'], restore: ['id','rev','base_rev','op_id'], changes: ['since','limit'],
+  revision: ['id','rev'], restore: ['id','rev','base_rev','op_id'], changes: ['since','limit','tail'],
   claim: ['id','ttl_seconds','force','base_rev','op_id'], release: ['id','force','base_rev','op_id'],
   update_task: ['id','status','due_at','metadata','base_rev','op_id'],
 };
@@ -356,6 +356,13 @@ export class SqliteStore implements Store {
       }
       case 'revision': return { note: this.historical(this.find(p.id,true),p.rev) };
       case 'changes': {
+        if (p.tail !== undefined) {
+          // The newest events, oldest first, with the cursor at the head so polling continues from now.
+          if (p.since !== undefined || p.limit !== undefined) invalid('changes accepts tail, or since/limit, not both');
+          const rows = this.all('SELECT * FROM events ORDER BY seq DESC LIMIT ?', integer(p.tail,'tail',1,100)).reverse();
+          const head = Number(this.get('SELECT coalesce(max(seq),0) AS seq FROM events')?.seq);
+          return { events: rows.map(toEvent), cursor: head, has_more: false };
+        }
         const since = p.since === undefined ? 0 : integer(p.since,'since',0);
         const {limit} = this.page(p);
         const rows = this.all('SELECT * FROM events WHERE seq>? ORDER BY seq LIMIT ?',since,limit+1);

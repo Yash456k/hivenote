@@ -19,8 +19,8 @@ interface LocalStore extends Store {
   backup(destination: string): { path: string } | Promise<{ path: string }>;
   close(): void;
 }
-const booleanFlags = new Set(['help', 'version', 'json', 'force', 'full']);
-const allowedFlags = new Set(['db', 'url', 'token-file', 'agent', 'session', 'timeout-ms', 'retries', 'params', 'op-id', 'id', 'ids', 'name', 'names', 'description', 'content', 'content-file', 'body', 'body-file', 'old-str', 'old-str-file', 'new-str', 'new-str-file', 'base-rev', 'rev', 'query', 'offset', 'limit', 'kind', 'status', 'due-at', 'metadata', 'since', 'ttl-seconds', 'device', 'scope', 'destination', 'host', 'port', 'timeout-seconds', 'interval-ms', ...booleanFlags]);
+const booleanFlags = new Set(['help', 'version', 'json', 'force', 'full', 'no-open']);
+const allowedFlags = new Set(['db', 'url', 'token-file', 'agent', 'session', 'timeout-ms', 'retries', 'params', 'op-id', 'id', 'ids', 'name', 'names', 'description', 'content', 'content-file', 'body', 'body-file', 'old-str', 'old-str-file', 'new-str', 'new-str-file', 'base-rev', 'rev', 'query', 'offset', 'limit', 'kind', 'status', 'due-at', 'metadata', 'since', 'ttl-seconds', 'device', 'scope', 'destination', 'host', 'port', 'timeout-seconds', 'interval-ms', 'tail', ...booleanFlags]);
 function parse(argv: string[]): Arguments {
   const flags: Flags = new Map();
   const positional: string[] = [];
@@ -61,7 +61,7 @@ const methodFlags: Record<Method, string[]> = {
   history: ['id', 'offset', 'limit'],
   revision: ['id', 'rev'],
   restore: ['id', 'rev', 'base-rev'],
-  changes: ['since', 'limit'],
+  changes: ['since', 'limit', 'tail'],
   claim: ['id', 'ttl-seconds', 'force', 'base-rev'],
   release: ['id', 'force', 'base-rev'],
   update_task: ['id', 'base-rev', 'status', 'due-at', 'metadata'],
@@ -73,6 +73,7 @@ function validateFlags(command: string, action: string | undefined, flags: Flags
   else if (command === 'token') options = action === 'create' ? ['device', 'scope'] : action === 'revoke' ? ['id'] : [];
   else if (command === 'backup') options = ['destination'];
   else if (command === 'serve') options = ['host', 'port'];
+  else if (command === 'ui') options = ['host', 'port', 'no-open'];
   else if (command === 'mcp') options = ['timeout-ms', 'retries'];
   else if (command === 'wait') options = ['id', 'name', 'status', 'timeout-seconds', 'interval-ms', 'timeout-ms', 'retries'];
   else if (command === 'config' || command === 'show') options = [];
@@ -129,7 +130,7 @@ function parameters(method: Method, flags: Flags, positional: string[]): Params 
   // store's strict wire validation can reject unknown fields such as id/name.
   const stringFlags = [...(method === 'read' ? [] : ['id', 'name']), 'description', 'query', 'kind', 'status'];
   for (const key of stringFlags) if (flag(flags, key) !== undefined) set(key, flag(flags, key));
-  const numbers = ['base-rev', 'rev', 'offset', 'limit', 'since', 'ttl-seconds'];
+  const numbers = ['base-rev', 'rev', 'offset', 'limit', 'since', 'ttl-seconds', 'tail'];
   for (const key of numbers) { const value = flag(flags, key); if (value !== undefined) set(key.replaceAll('-', '_'), number(value, `--${key}`)); }
   if (flags.has('force')) set('force', flag(flags, 'force') === 'true');
   if (flag(flags, 'full') === 'true') set('detail', 'full');
@@ -230,7 +231,8 @@ Wait:     wait --name NAME|--id ID [--status done] [--timeout-seconds 540|0] [--
 Content:  --content-file / --body-file / --new-str-file accept '-' for UTF-8 stdin.
 Mutations: --op-id ID; all methods accept --params JSON.
 Tokens:   token create --device LABEL [--scope ro|rw]; token revoke ID
-Server:   serve [--host 127.0.0.1] [--port 7391]
+Server:   serve [--host 127.0.0.1] [--port 7391]   (also serves the live dashboard at /)
+Dashboard: ui [--port 7391] [--no-open]   (opens the live dashboard; this machine needs no token)
 Config:   config set --url URL --token-file PATH | config set --db PATH
 Credentials are accepted only via a token file or HIVENOTE_TOKEN, never argv.
 --db and --url are mutually exclusive, including saved configuration.
@@ -261,7 +263,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   }
   const config = resolveConfig(override, saved);
   if (command === 'show') { output({ ...config, configDirectory: configDirectory(), defaultDb: defaultDbPath() }); return; }
-  if (command === 'token' || command === 'backup' || command === 'serve') {
+  if (command === 'token' || command === 'backup' || command === 'serve' || command === 'ui') {
     const store = await localStore(config);
     let retained = false;
     try {
@@ -282,6 +284,20 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
         const destination = flag(flags, 'destination') ?? positional.shift();
         if (!destination || positional.length) throw new HiveNoteError('invalid_args', 'backup requires a destination path');
         output(await store.backup(destination));
+      } else if (command === 'ui') {
+        if (positional.length) throw new HiveNoteError('invalid_args', 'Unexpected ui arguments');
+        const { openBrowser } = await import('./dashboard.js');
+        const { startServer } = await import('./http.js');
+        const host = flag(flags, 'host') ?? '127.0.0.1';
+        // This machine's browser reads without a token; other devices still need one.
+        const server = await startServer(store, { host, localViewer: true, ...(flag(flags, 'port') !== undefined ? { port: number(flag(flags, 'port')!, '--port') } : {}) });
+        retained = true;
+        const { port } = server.address() as { port: number };
+        const url = `http://127.0.0.1:${port}/`;
+        output({ dashboard: url });
+        if (flag(flags, 'no-open') !== 'true') openBrowser(url);
+        const stop = (): void => { server.close(() => store.close()); server.closeIdleConnections(); };
+        process.once('SIGINT', stop); process.once('SIGTERM', stop);
       } else {
         if (positional.length) throw new HiveNoteError('invalid_args', 'Unexpected serve arguments');
         const { startServer } = await import('./http.js');

@@ -50,7 +50,7 @@ export function clientParams(method: Method, params: Params = {}): Params {
  history {id,offset?,limit?} => {events:Event[],total,offset,has_more} (deleted IDs allowed)
  revision {id,rev} => {note:Note}
  restore {id,rev,base_rev,op_id} (deleted ID allowed)
- changes {since?:seq,limit?} => {events:Event[],cursor,has_more}
+ changes {since?:seq,limit?} | {tail:1-100} => {events:Event[],cursor,has_more}
  claim {id,ttl_seconds?:number,force?:boolean,base_rev?,op_id} default 900 seconds
  release {id,force?:boolean,base_rev?,op_id}
  update_task {id,base_rev,status?,due_at?:ISO|null,metadata?,op_id}
