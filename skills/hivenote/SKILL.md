@@ -7,7 +7,7 @@ description: Shared memory across agents. Use when starting work on a project (t
 
 HiveNote is one shared notebook for every agent the user runs (Claude Code, Codex, Hermes, and others), on this machine or others. Each note has a unique **name**, a one-line **description**, and **content**. Like skills, you decide what to open from the name and description alone.
 
-Every command prints JSON. If `hivenote` is not found, tell the user to run `npm install -g hivenote` (it needs Node 22.16 or newer).
+Every command prints JSON. If `hivenote` is not found, tell the user to run `npm install -g hivenote` (it needs Node 22.16 or newer). This skill covers everyday use; `hivenote --help` lists every command, including history, restore and delete.
 
 ## Before you start work
 
