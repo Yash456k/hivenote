@@ -247,6 +247,8 @@ export class SqliteStore implements Store {
           const old = text(p.old_str,'old_str',524288,true);
           if (!old.length) invalid('old_str must not be empty');
           const replacement = text(p.new_str,'new_str',524288,true);
+          // A revision should mean something changed; reject edits that change nothing.
+          if (replacement === old) invalid('new_str is identical to old_str; nothing would change');
           const first = note.content.indexOf(old);
           if (first < 0 || note.content.indexOf(old, first + 1) >= 0) this.conflict(note, 'old_str must match exactly once in current content');
           note.content = text(note.content.slice(0, first) + replacement + note.content.slice(first + old.length),'content',524288,true);
@@ -254,10 +256,12 @@ export class SqliteStore implements Store {
         }
         case 'replace': {
           if (!['name','description','content','metadata'].some(k => p[k] !== undefined)) invalid('replace requires at least one changed field');
+          const before = JSON.stringify([note.name, note.description, note.content, note.metadata]);
           if (p.name !== undefined) note.name = text(p.name,'name',256);
           if (p.description !== undefined) note.description = text(p.description,'description',4096,true);
           if (p.content !== undefined) note.content = text(p.content,'content',524288,true);
           if (p.metadata !== undefined) note.metadata = metadata(p.metadata);
+          if (JSON.stringify([note.name, note.description, note.content, note.metadata]) === before) invalid('replace would not change anything');
           break;
         }
         case 'delete': note.deleted_at = now; note.claimed_by = null; note.claim_expires_at = null; break;

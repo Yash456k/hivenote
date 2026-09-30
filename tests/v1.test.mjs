@@ -99,3 +99,14 @@ test('wait returns at once when the status already matches, and fails clearly ot
   await expectError(['--name', 'plain', '--id', task.note.id], 'invalid_args');
   await expectError(['--name', 'plain', '--status', 'finished'], 'invalid_args');
 });
+
+test('edits and replacements that change nothing are rejected instead of creating revisions', async t => {
+  const dir = await sandbox(t, 'noop');
+  const store = new SqliteStore(join(dir, 'notes.db'));
+  t.after(() => store.close());
+  const { note } = await store.call('create', fixture({ content: 'fix pending' }));
+  await assert.rejects(store.call('edit', { id: note.id, old_str: 'x', new_str: 'x' }), error => error.code === 'validation_error');
+  await assert.rejects(store.call('replace', { id: note.id, base_rev: 1, content: 'fix pending' }), error => error.code === 'validation_error');
+  const [current] = (await store.call('read', { ids: [note.id] })).notes;
+  assert.equal(current.rev, 1);
+});
