@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { clientParams, isMethod, MUTATIONS, HiveNoteError, type Actor, type Method, type Params, type Store } from './contract.js';
 import { HttpStore } from './client.js';
 import { configDirectory, defaultDbPath, loadConfig, readToken, resolveConfig, saveConfig, type Config } from './config.js';
+import { assertSupportedNode, quietSqliteWarning } from './runtime.js';
+import { WAIT_DEFAULTS, waitForNote, type TaskStatus, type WaitOptions } from './wait.js';
 
 type Flags = Map<string, string[]>;
 interface Arguments { positional: string[]; flags: Flags; }
@@ -18,7 +20,7 @@ interface LocalStore extends Store {
   close(): void;
 }
 const booleanFlags = new Set(['help', 'version', 'json', 'force', 'full']);
-const allowedFlags = new Set(['db', 'url', 'token-file', 'agent', 'session', 'timeout-ms', 'retries', 'params', 'op-id', 'id', 'ids', 'name', 'names', 'description', 'content', 'content-file', 'body', 'body-file', 'old-str', 'old-str-file', 'new-str', 'new-str-file', 'base-rev', 'rev', 'query', 'offset', 'limit', 'kind', 'status', 'due-at', 'metadata', 'since', 'ttl-seconds', 'device', 'scope', 'destination', 'host', 'port', ...booleanFlags]);
+const allowedFlags = new Set(['db', 'url', 'token-file', 'agent', 'session', 'timeout-ms', 'retries', 'params', 'op-id', 'id', 'ids', 'name', 'names', 'description', 'content', 'content-file', 'body', 'body-file', 'old-str', 'old-str-file', 'new-str', 'new-str-file', 'base-rev', 'rev', 'query', 'offset', 'limit', 'kind', 'status', 'due-at', 'metadata', 'since', 'ttl-seconds', 'device', 'scope', 'destination', 'host', 'port', 'timeout-seconds', 'interval-ms', ...booleanFlags]);
 function parse(argv: string[]): Arguments {
   const flags: Flags = new Map();
   const positional: string[] = [];
@@ -72,6 +74,7 @@ function validateFlags(command: string, action: string | undefined, flags: Flags
   else if (command === 'backup') options = ['destination'];
   else if (command === 'serve') options = ['host', 'port'];
   else if (command === 'mcp') options = ['timeout-ms', 'retries'];
+  else if (command === 'wait') options = ['id', 'name', 'status', 'timeout-seconds', 'interval-ms', 'timeout-ms', 'retries'];
   else if (command === 'config' || command === 'show') options = [];
   else throw new HiveNoteError('invalid_args', 'Unknown command');
   for (const option of options) allowed.add(option);
@@ -172,6 +175,24 @@ function parameters(method: Method, flags: Flags, positional: string[]): Params 
   }
   return clientParams(method, params);
 }
+const TASK_STATUSES: TaskStatus[] = ['todo', 'doing', 'done', 'cancelled'];
+function waitOptions(flags: Flags, positional: string[]): WaitOptions {
+  if (positional.length) throw new HiveNoteError('invalid_args', 'wait takes --name NAME or --id ID, not positional arguments');
+  const id = flag(flags, 'id'), name = flag(flags, 'name');
+  if ((id === undefined) === (name === undefined)) throw new HiveNoteError('invalid_args', 'wait requires exactly one of --name or --id');
+  const status = flag(flags, 'status');
+  if (status !== undefined && !TASK_STATUSES.includes(status as TaskStatus)) throw new HiveNoteError('invalid_args', `--status must be one of ${TASK_STATUSES.join(', ')}`);
+  const timeoutSeconds = flags.has('timeout-seconds') ? number(flag(flags, 'timeout-seconds')!, '--timeout-seconds') : WAIT_DEFAULTS.timeoutSeconds;
+  if (timeoutSeconds < 0) throw new HiveNoteError('invalid_args', '--timeout-seconds must be 0 (forever) or more');
+  const intervalMs = flags.has('interval-ms') ? number(flag(flags, 'interval-ms')!, '--interval-ms') : WAIT_DEFAULTS.intervalMs;
+  if (intervalMs < 100 || intervalMs > 60_000) throw new HiveNoteError('invalid_args', '--interval-ms must be between 100 and 60000');
+  return {
+    selector: id !== undefined ? { id } : { name: name! },
+    ...(status !== undefined ? { status: status as TaskStatus } : {}),
+    timeoutSeconds,
+    intervalMs,
+  };
+}
 function overrides(flags: Flags): Config {
   const config: Config = {};
   for (const [key, option] of [['db', 'db'], ['url', 'url'], ['tokenFile', 'token-file'], ['agent', 'agent'], ['session', 'session']] as const) {
@@ -186,6 +207,8 @@ async function localStore(config: Config): Promise<LocalStore> {
   const actor: Actor = { principal: 'local', device: 'local', scope: 'rw', verified: false };
   if (config.agent) actor.agent = config.agent;
   if (config.session) actor.session = config.session;
+  assertSupportedNode();
+  quietSqliteWarning();
   const modulePath = './sqlite.js';
   const { SqliteStore } = await import(modulePath) as { SqliteStore: new (path: string, actor?: Actor) => LocalStore };
   return new SqliteStore(config.db ?? defaultDbPath(), actor);
@@ -202,6 +225,8 @@ Create:   create NAME --description TEXT --content TEXT [--kind task]
 Edit:     edit ID --old-str TEXT --new-str TEXT [--base-rev N]
 Replace:  replace ID --base-rev N --content-file PATH
 Append:   append ID --body TEXT
+List:     list [--kind task] [--status S] [--full]   (brief: name + description by default)
+Wait:     wait --name NAME|--id ID [--status done] [--timeout-seconds 600|0] [--interval-ms 1000]
 Content:  --content-file / --body-file / --new-str-file accept '-' for UTF-8 stdin.
 Mutations: --op-id ID; all methods accept --params JSON.
 Tokens:   token create --device LABEL [--scope ro|rw]; token revoke ID
@@ -269,7 +294,8 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     } finally { if (!retained) store.close(); }
     return;
   }
-  if (!isMethod(command) && command !== 'mcp') throw new HiveNoteError('invalid_args', 'Unknown command');
+  if (!isMethod(command) && command !== 'mcp' && command !== 'wait') throw new HiveNoteError('invalid_args', 'Unknown command');
+  const waiting = command === 'wait' ? waitOptions(flags, positional) : undefined;
   let store: Store;
   if (config.url) {
     store = new HttpStore(config.url, readToken(config), {
@@ -278,6 +304,11 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       ...(config.agent ? { agent: config.agent } : {}), ...(config.session ? { session: config.session } : {}),
     });
   } else store = await localStore(config);
+  if (waiting) {
+    try { output(await waitForNote(store, waiting)); }
+    finally { store.close?.(); }
+    return;
+  }
   if (command === 'mcp') {
     if (positional.length) { store.close?.(); throw new HiveNoteError('invalid_args', 'Unexpected mcp arguments'); }
     try {
@@ -289,6 +320,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     } catch (error) { store.close?.(); throw error; }
     return;
   }
+  if (!isMethod(command)) { store.close?.(); throw new HiveNoteError('invalid_args', 'Unknown command'); }
   try { output(await store.call(command, params)); }
   finally { store.close?.(); }
 }
