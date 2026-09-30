@@ -282,6 +282,11 @@ are retained indefinitely. Offset pagination is accurate per request but can
 shift across concurrent requests; use the monotonic changes cursor for a complete
 feed. See [architecture](docs/ARCHITECTURE.md) and [real verification](docs/VERIFICATION.md).
 
+Tests cover the main behavior, the things users would notice if they broke:
+saving and reading notes, search, edits and conflicts, tasks and handoffs, and
+remote access. They are not meant to cover every small detail. A feature gets a
+test when it lands, and a real bug gets a test when it's fixed.
+
 Development: `npm ci`, `npm run typecheck`, `npm test`, `npm run bench`,
 `node scripts/pack-smoke.mjs`. The smoke test installs a tarball into a disposable
 prefix and runs the actual installed CLI and MCP SDK exchange. CI runs all of
