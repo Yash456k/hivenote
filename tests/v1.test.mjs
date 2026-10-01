@@ -137,3 +137,24 @@ test('hivenote ui serves the dashboard and lets this machine read without a toke
   // Anything relayed by a proxy or tunnel still needs a token.
   assert.equal((await call('list', {}, { 'x-forwarded-for': '203.0.113.9' })).status, 401);
 });
+
+test('hivenote connect checks the token, then every command uses the remote hive until disconnect', async t => {
+  const dir = await sandbox(t, 'connect');
+  const hive = join(dir, 'hive.db');
+  const laptop = { HIVENOTE_HOME: join(dir, 'laptop') };
+  await cliJson(['--db', hive, 'create', 'on-hive', '--description', 'Lives on the hive machine']);
+  const { token } = await cliJson(['--db', hive, 'token', 'create', '--device', 'laptop', '--scope', 'rw']);
+  const server = spawn(process.execPath, [cli, '--db', hive, 'serve', '--port', '0']);
+  t.after(() => server.kill());
+  const { listening } = await new Promise(resolve => server.stdout.once('data', chunk => resolve(JSON.parse(String(chunk)))));
+  const url = `http://127.0.0.1:${listening.port}`;
+
+  const refused = await run(process.execPath, [cli, 'connect', url], { env: laptop, input: 'wrong-token-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n' });
+  assert.notEqual(refused.code, 0);
+  assert.equal((await cliJson(['config', 'show'], { env: laptop })).url, undefined, 'nothing saved after a bad token');
+
+  assert.equal((await cliJson(['connect', url], { env: laptop, input: token + '\n' })).connected, url);
+  assert.deepEqual((await cliJson(['list'], { env: laptop })).notes.map(note => note.name), ['on-hive']);
+  await cliJson(['disconnect'], { env: laptop });
+  assert.equal((await cliJson(['list'], { env: laptop })).total, 0);
+});

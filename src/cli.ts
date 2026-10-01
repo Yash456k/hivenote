@@ -76,7 +76,7 @@ function validateFlags(command: string, action: string | undefined, flags: Flags
   else if (command === 'ui') options = ['host', 'port', 'no-open'];
   else if (command === 'mcp') options = ['timeout-ms', 'retries'];
   else if (command === 'wait') options = ['id', 'name', 'status', 'timeout-seconds', 'interval-ms', 'timeout-ms', 'retries'];
-  else if (command === 'config' || command === 'show') options = [];
+  else if (command === 'config' || command === 'show' || command === 'connect' || command === 'disconnect') options = [];
   else throw new HiveNoteError('invalid_args', 'Unknown command');
   for (const option of options) allowed.add(option);
   for (const [key, values] of flags) {
@@ -233,6 +233,8 @@ Mutations: --op-id ID; all methods accept --params JSON.
 Tokens:   token create --device LABEL [--scope ro|rw]; token revoke ID
 Server:   serve [--host 127.0.0.1] [--port 7391]   (also serves the live dashboard at /)
 Dashboard: ui [--port 7391] [--no-open]   (opens the live dashboard; this machine needs no token)
+Connect:  connect [URL]   (asks for the hive URL and token; then every command uses that hive)
+          disconnect      (back to the local database)
 Config:   config set --url URL --token-file PATH | config set --db PATH
 Credentials are accepted only via a token file or HIVENOTE_TOKEN, never argv.
 --db and --url are mutually exclusive, including saved configuration.
@@ -248,6 +250,12 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   const params = isMethod(command) ? parameters(command, flags, positional) : undefined;
   const saved = command === 'config' && positional[0] === 'reset' ? {} : loadConfig();
   const override = overrides(flags);
+  if (command === 'connect' || command === 'disconnect') {
+    if (positional.length > (command === 'connect' ? 1 : 0)) throw new HiveNoteError('invalid_args', `Unexpected ${command} arguments`);
+    const { connect, disconnect } = await import('./connect.js');
+    output(command === 'connect' ? await connect(positional[0]) : disconnect());
+    return;
+  }
   if (command === 'config') {
     const action = positional.shift() ?? 'show';
     if (positional.length) throw new HiveNoteError('invalid_args', 'Unexpected config arguments');

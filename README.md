@@ -173,7 +173,21 @@ with `hivenote --db PATH token revoke CLIENT_UUID`; revocation also denies recei
 replays. `ro` can read all notes/history, `rw` can mutate all notes; there are no
 per-note ACLs or separate force-operation roles in v0.1.
 
-On a client device:
+On a client device, connect once. It asks for the URL and the token (typed
+hidden), checks they work, and keeps the token privately in HiveNote's config
+folder. Every command, including agents', then uses that hive:
+
+```sh
+hivenote connect              # Hive URL: http://100.64.0.5:7391   Token: ••••
+echo "$TOKEN" | hivenote connect https://notes.example.com   # scripted
+hivenote disconnect           # back to the local database
+```
+
+Any reachable address works: LAN, Tailscale, a public IP or a tunnel. Over the
+open internet use `https://` (for example a Cloudflare tunnel), because plain
+HTTP sends the token unencrypted.
+
+Lower-level equivalents:
 
 ```sh
 hivenote --url https://notes.example.com --token-file /private/token.txt list
