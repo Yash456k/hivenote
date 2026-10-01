@@ -11,6 +11,8 @@ export const cli = join(root, 'dist/cli.js');
 // Never read or write the developer's real HiveNote config or database: every
 // test process (and the CLI processes it spawns) gets its own private home.
 // Tests that need a specific home still pass HIVENOTE_HOME explicitly.
+// Tests often run inside an agent; its markers would label every write.
+for (const marker of ['CLAUDECODE', 'CODEX_CI', 'CODEX_PERMISSION_PROFILE', 'CODEX_SANDBOX', 'HERMES_SESSION_ID', 'HERMES_AGENT']) delete process.env[marker];
 if (!process.env.HIVENOTE_HOME) {
   process.env.HIVENOTE_HOME = await mkdtemp(join(tmpdir(), 'hivenote-test-home-'));
 }

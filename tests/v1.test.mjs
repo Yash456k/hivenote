@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { SqliteStore } from '../dist/sqlite.js';
-import { isSupportedNode, MINIMUM_NODE } from '../dist/runtime.js';
+import { detectAgent, isSupportedNode, MINIMUM_NODE } from '../dist/runtime.js';
 import { spawn } from 'node:child_process';
 import { cli, cliJson, fixture, run, sandbox } from './helpers.mjs';
 
@@ -157,4 +157,16 @@ test('hivenote connect checks the token, then every command uses the remote hive
   assert.deepEqual((await cliJson(['list'], { env: laptop })).notes.map(note => note.name), ['on-hive']);
   await cliJson(['disconnect'], { env: laptop });
   assert.equal((await cliJson(['list'], { env: laptop })).total, 0);
+});
+
+test('writes are labeled with the agent running the command, innermost agent first', async t => {
+  assert.equal(detectAgent({ CLAUDECODE: '1' }), 'claude-code');
+  assert.equal(detectAgent({ CLAUDECODE: '1', CODEX_CI: '1' }), 'codex', 'Codex started from Claude Code');
+  assert.equal(detectAgent({ HERMES_SESSION_ID: 'x', CLAUDECODE: '1' }), 'hermes');
+  assert.equal(detectAgent({}), undefined);
+  const db = join(await sandbox(t, 'label'), 'notes.db');
+  const created = await cliJson(['--db', db, 'create', 'labeled'], { env: { CODEX_CI: '1' } });
+  assert.equal(created.note.last_attribution.agent, 'codex');
+  const explicit = await cliJson(['--db', db, '--agent', 'me', 'create', 'explicit'], { env: { CODEX_CI: '1' } });
+  assert.equal(explicit.note.last_attribution.agent, 'me');
 });

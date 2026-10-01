@@ -43,3 +43,15 @@ export function quietSqliteWarning(): void {
     emit(warning, ...rest);
   }) as typeof process.emitWarning;
 }
+
+/**
+ * Which agent is running this command, from the markers agents set for the shell
+ * commands they run. Innermost first: an agent started from inside another one
+ * inherits the outer agent's markers. Like --agent, this is a self-reported label.
+ */
+export function detectAgent(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (env.HERMES_SESSION_ID || env.HERMES_AGENT) return 'hermes';
+  if (env.CODEX_CI || env.CODEX_PERMISSION_PROFILE || env.CODEX_SANDBOX) return 'codex';
+  if (env.CLAUDECODE) return 'claude-code';
+  return undefined;
+}

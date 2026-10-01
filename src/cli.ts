@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { clientParams, isMethod, MUTATIONS, HiveNoteError, VERSION, type Actor, type Method, type Params, type Store } from './contract.js';
 import { HttpStore } from './client.js';
 import { configDirectory, defaultDbPath, loadConfig, readToken, resolveConfig, saveConfig, type Config } from './config.js';
-import { assertSupportedNode, quietSqliteWarning } from './runtime.js';
+import { assertSupportedNode, detectAgent, quietSqliteWarning } from './runtime.js';
 import { WAIT_DEFAULTS, waitForNote, type TaskStatus, type WaitOptions } from './wait.js';
 
 type Flags = Map<string, string[]>;
@@ -270,6 +270,9 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   const config = resolveConfig(override, saved);
+  // Label writes with the agent running us (Claude Code, Codex, Hermes) unless --agent says otherwise.
+  const detected = config.agent === undefined ? detectAgent() : undefined;
+  if (detected) config.agent = detected;
   if (command === 'show') { output({ ...config, configDirectory: configDirectory(), defaultDb: defaultDbPath() }); return; }
   if (command === 'token' || command === 'backup' || command === 'serve' || command === 'ui') {
     const store = await localStore(config);
