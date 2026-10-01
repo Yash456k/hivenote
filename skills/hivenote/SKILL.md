@@ -65,6 +65,8 @@ hivenote wait --name build-api --status done     # blocks up to 9 minutes, then 
 hivenote wait --name build-api                   # wakes on any change or appended progress
 ```
 
+It checks every 5 seconds. If you expect the other agent to take a while, check less often: `--interval-seconds 60`.
+
 Run `wait` in the **foreground**, not as a background job, and give the command a time limit of at least 10 minutes (in Claude Code, a Bash `timeout` of 600000). A background wait is lost if your session ends first. A timeout exits with an error; tell the user rather than waiting again and again.
 
 ## Rules

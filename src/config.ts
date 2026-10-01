@@ -51,8 +51,16 @@ export function saveConfig(config: Config, path = configPath()): Config {
   } finally { if (existsSync(temporary)) unlinkSync(temporary); }
   return result;
 }
+/**
+ * Flags win over saved config: --db on a connected machine runs that one command
+ * locally, and --url on a local machine runs it remotely. Only --db and --url
+ * together are a conflict.
+ */
 export function resolveConfig(overrides: Config = {}, saved: Config = loadConfig()): Config {
-  return validate({ ...saved, ...overrides });
+  const base: Config = { ...saved };
+  if (overrides.db) { delete base.url; delete base.tokenFile; }
+  if (overrides.url) delete base.db;
+  return validate({ ...base, ...overrides });
 }
 export function readToken(config: Config, env: NodeJS.ProcessEnv = process.env): string {
   // An explicitly configured file takes precedence over environment credentials.

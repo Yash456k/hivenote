@@ -129,7 +129,7 @@ test('review: normal help, aliases and nonconflicting raw/native inputs still wo
   for (const args of [['--help'], ['-h'], ['create', '--help']]) {
     const result = await ctx.run(...args);
     assert.equal(result.code, 0, result.stderr);
-    assert.match(result.stdout, /Commands:/u);
+    assert.match(result.stdout, /hivenote/u);
   }
   assert.equal((await ctx.call('--version')).version, JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
   const created = await ctx.call('create', 'aliases', '--body', 'old', '--params', '{"kind":"task"}');

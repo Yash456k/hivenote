@@ -1,6 +1,6 @@
 {
   "name": "hivenote",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Shared memory and inert task data for agents, backed by one authoritative SQLite database",
   "type": "module",
   "bin": { "hivenote": "dist/cli.js" },

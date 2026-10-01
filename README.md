@@ -130,8 +130,8 @@ hivenote wait --id NOTE_UUID                       # blocks until any change or 
 
 `wait` prints the note and its latest appended progress when the condition is met,
 and exits nonzero on timeout (default 540 seconds; `--timeout-seconds 0` waits
-forever) or if the note is deleted. It polls with `read` every `--interval-ms`
-(default 1000), so it works the same against a local database or a remote server
+forever) or if the note is deleted. It checks with `read` every 5 seconds
+(`--interval-seconds 60` for long work), so it works the same against a local database or a remote server
 and needs only a read-only token. It never starts agents or runs commands: a user
 script can do that, e.g. `hivenote wait --name X --status done && your-command`.
 
@@ -200,8 +200,9 @@ hivenote config set --db /path/on/local/disk/notes.db
 
 URL must be an HTTP(S) origin without credentials, path, query or fragment.
 Invalid config and remote failure fail closed: **no silent local fallback**.
-Explicit `--db` and `--url` conflict, including a conflicting saved mode; switch
-using `config set` or reset first. Config stores paths/labels, never a raw token.
+Flags win over saved config for that one command: `--db` on a connected machine
+runs locally, `--url` on a local one runs remotely. Only `--db` and `--url`
+together are an error. Config stores paths/labels, never a raw token.
 HTTP calls default to a 10-second attempt timeout and at most two retries for
 transport failures/503; retries reuse the exact operation ID and request.
 One request per tool call except those bounded retries; batch read is one call.

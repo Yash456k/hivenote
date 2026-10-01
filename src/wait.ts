@@ -29,8 +29,11 @@ export interface WaitResult {
   updates: Event[];
 }
 
-/** 9 minutes: finishes before the 10-minute ceiling agents such as Claude Code put on one command. */
-export const WAIT_DEFAULTS = { timeoutSeconds: 540, intervalMs: 1000 } as const;
+/**
+ * Check every 5 seconds; give up after 9 minutes, before the 10-minute ceiling agents
+ * such as Claude Code put on one command.
+ */
+export const WAIT_DEFAULTS = { timeoutSeconds: 540, intervalMs: 5000 } as const;
 
 interface ReadResult { notes: Note[]; updates: Event[] }
 
