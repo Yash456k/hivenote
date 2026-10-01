@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { access } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { sandbox, cli, run, cliJson } from './helpers.mjs';
 import { connectMcp, methodNames } from './mcp-helpers.mjs';
 
@@ -130,7 +131,7 @@ test('review: normal help, aliases and nonconflicting raw/native inputs still wo
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stdout, /Commands:/u);
   }
-  assert.equal((await ctx.call('--version')).version, '0.1.0');
+  assert.equal((await ctx.call('--version')).version, JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
   const created = await ctx.call('create', 'aliases', '--body', 'old', '--params', '{"kind":"task"}');
   const id = created.note.id;
   assert.equal((await ctx.call('edit', id, '--old-str', 'old', '--body', 'new')).note.content, 'new');

@@ -1,4 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+
+/** The package version, read from package.json so it is defined in one place. */
+export const VERSION = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version;
 
 export const METHODS = ['list','read','search','create','edit','replace','append','delete','history','revision','restore','changes','claim','release','update_task'] as const;
 export type Method = typeof METHODS[number];
