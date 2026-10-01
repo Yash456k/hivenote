@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { access } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { SqliteStore } from '../dist/sqlite.js';
 import { startServer } from '../dist/http.js';
-import { sandbox, fixture, cliJson, run, cli, actor, closeServer, serverUrl } from './helpers.mjs';
+import { sandbox, fixture, cliJson, run, cli, actor, closeServer, serverUrl, root } from './helpers.mjs';
 
 async function exercise(args, env) {
   const call = (method, params = {}) => cliJson([...args, method, '--params', JSON.stringify(params)], { env });
@@ -49,7 +50,7 @@ test('real local CLI subprocesses implement every operation, errors and paths wi
   assert.match(help.stdout, /hivenote|usage/iu);
   const version = await run(process.execPath, [cli, '--version'], { env });
   assert.equal(version.code, 0, version.stderr);
-  assert.match(version.stdout, /0\.1\.0/u);
+  assert.equal(JSON.parse(version.stdout).version, JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version);
   await exercise(['--db', db], env);
   await access(db);
 });

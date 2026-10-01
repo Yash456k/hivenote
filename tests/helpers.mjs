@@ -1,11 +1,19 @@
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 
 export const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const cli = join(root, 'dist/cli.js');
+
+// Never read or write the developer's real HiveNote config or database: every
+// test process (and the CLI processes it spawns) gets its own private home.
+// Tests that need a specific home still pass HIVENOTE_HOME explicitly.
+if (!process.env.HIVENOTE_HOME) {
+  process.env.HIVENOTE_HOME = await mkdtemp(join(tmpdir(), 'hivenote-test-home-'));
+}
 // Direct test actors model local filesystem callers, not authenticated tokens.
 export const actor = (principal = 'test-user', device = 'test-device', scope = 'rw') => ({ principal, device, scope, verified: false });
 export const params = (extra = {}) => ({ op_id: randomUUID(), ...extra });
