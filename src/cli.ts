@@ -16,6 +16,7 @@ import { waitForNote } from './wait.js';
 const HELP = `hivenote: shared notes and tasks for agents (JSON output)
 
 hivenote [--db PATH | --url URL --token-file PATH] COMMAND [options]
+hivenote --version | -v | version      hivenote --help | -h | help
 
 Notes:    list [--kind task] [--status S] [--full]   names and descriptions (--full: every field)
           search QUERY | read ID... | read --names 'a,b'
@@ -222,8 +223,8 @@ async function runMcp(store: Store, config: Config, positional: string[]): Promi
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   const { flags, positional } = parse(argv);
-  if (flag(flags, 'version') === 'true') { output({ version: VERSION }); return; }
-  if (flag(flags, 'help') === 'true' || !positional.length) { process.stdout.write(HELP); return; }
+  if (flag(flags, 'version') === 'true' || (positional.length === 1 && positional[0] === 'version')) { output({ version: VERSION }); return; }
+  if (flag(flags, 'help') === 'true' || !positional.length || positional[0] === 'help') { process.stdout.write(HELP); return; }
 
   const requested = positional.shift()!;
   const command = requested === 'update-task' ? 'update_task' : requested;
@@ -256,7 +257,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     await runLocalAdmin(command, config, positional, flags);
     return;
   }
-  if (!isMethod(command) && command !== 'mcp' && command !== 'wait') fail('Unknown command');
+  if (!isMethod(command) && command !== 'mcp' && command !== 'wait') fail(`Unknown command '${requested}'. Run hivenote --help to see them all.`);
 
   const waiting = command === 'wait' ? waitOptions(flags, positional) : undefined;
   const store = await openStore(config, flags);

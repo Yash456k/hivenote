@@ -49,7 +49,7 @@ function commandFlags(command: string, action: string | undefined): string[] {
     case 'wait': return ['id', 'name', 'status', 'timeout-seconds', 'interval-seconds', 'interval-ms', 'timeout-ms', 'retries'];
     case 'status': return ['timeout-ms'];
     case 'config': case 'show': case 'connect': case 'disconnect': return [];
-    default: throw new HiveNoteError('invalid_args', 'Unknown command');
+    default: throw new HiveNoteError('invalid_args', `Unknown command '${command}'. Run hivenote --help to see them all.`);
   }
 }
 
@@ -60,6 +60,7 @@ export function parse(argv: string[]): Arguments {
     const argument = argv[i]!;
     if (argument === '--') { positional.push(...argv.slice(i + 1)); break; }
     if (argument === '-h') { flags.set('help', ['true']); continue; }
+    if (argument === '-v') { flags.set('version', ['true']); continue; }
     if (!argument.startsWith('--')) { positional.push(argument); continue; }
 
     const equals = argument.indexOf('=');
