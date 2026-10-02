@@ -12,7 +12,7 @@ Every command prints JSON (if you ever get plain text instead, add `--json`). Wh
 ## Before you start work
 
 1. `hivenote list` shows every note's name and description. If `has_more` is true, continue with `--offset 50`.
-2. Read what is relevant to your task: `hivenote read --names 'name-one,name-two'`
+2. Read what is relevant to your task: `hivenote read name-one name-two`
 3. Or search content: `hivenote search 'deploy AND hermes'`
 
 Skip notes that are not relevant. Do not read everything.
@@ -63,8 +63,8 @@ When several agents work together (for example, subagents of one session), give 
 To wait for another agent to finish:
 
 ```sh
-hivenote wait --name build-api --status done     # blocks up to 9 minutes, then prints the note and its progress
-hivenote wait --name build-api                   # wakes on any change or appended progress
+hivenote wait build-api --status done            # blocks up to 9 minutes, then prints the note and its progress
+hivenote wait build-api                          # wakes on any change or appended progress
 ```
 
 It checks every 5 seconds. If you expect the other agent to take a while, check less often: `--interval-seconds 60`.

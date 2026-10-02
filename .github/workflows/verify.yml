@@ -6,13 +6,17 @@ on:
 permissions:
   contents: read
 jobs:
-  linux:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+  verify:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         node: ['22.16.0', '22', '24', '26']
+        include:
+          - { os: macos-latest, node: '24' }
+          - { os: windows-latest, node: '24' }
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6

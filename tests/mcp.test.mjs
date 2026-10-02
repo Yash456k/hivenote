@@ -31,12 +31,12 @@ test('real MCP SDK over remote stdio uses HTTP authority; read-only and revoked 
   assert.equal(created.note.last_attribution.device, token.device);
   const reader = await connectMcp(process.execPath, [cli, '--url', url, 'mcp'], { HIVENOTE_HOME: join(dir, 'config'), HIVENOTE_TOKEN: ro.token });
   t.after(() => reader.client.close());
-  const readable = await reader.client.callTool({ name: 'read', arguments: { ids: [created.note.id] } });
+  const readable = await reader.client.callTool({ name: 'read', arguments: { names: [created.note.name] } });
   assert.ok(!readable.isError);
-  const forbidden = await reader.client.callTool({ name: 'append', arguments: { id: created.note.id, body: 'forbidden' } });
+  const forbidden = await reader.client.callTool({ name: 'append', arguments: { note: created.note.name, body: 'forbidden' } });
   assert.equal(forbidden.isError, true);
   assert.equal(decodeTool(forbidden).error.status, 403);
-  store.tokenRevoke(token.id);
+  store.tokenRevoke(token.device);
   const revoked = await connection.client.callTool({ name: 'list', arguments: {} });
   assert.equal(revoked.isError, true);
   assert.equal(decodeTool(revoked).error.status, 401);

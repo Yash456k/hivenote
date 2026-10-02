@@ -87,7 +87,7 @@ test('revoked upload cannot dispatch, even if valid token was authenticated befo
     });
     req.on('error',reject);
     req.write('{"method":"create","params":');
-    ready.then(()=>{store.tokenRevoke(token.id);req.end(JSON.stringify(params(fixture()))+'}');});
+    ready.then(()=>{store.tokenRevoke(token.device);req.end(JSON.stringify(params(fixture()))+'}');});
   });
   assert.equal((await result).status,401);
   assert.equal((await store.call('list')).total,0);

@@ -1,5 +1,6 @@
 import * as http from 'node:http';
 import { readFileSync } from 'node:fs';
+import { timingSafeEqual } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isMethod, MUTATIONS, HiveNoteError, VERSION, type Actor, type Method, type Params } from './contract.js';
@@ -7,8 +8,8 @@ import { isMethod, MUTATIONS, HiveNoteError, VERSION, type Actor, type Method, t
 export interface ServerStore { authenticate(token: string): Actor; execute(method: Method, params: Params, actor: Actor): unknown; }
 export interface ServerOptions {
   host?: string; port?: number; dropResponseOnce?: boolean;
-  /** `hivenote ui`: let this machine's browser read without a token. Writes still need one. */
-  localViewer?: boolean;
+  /** `hivenote ui`: a key for this launch only; the page that holds it may read, never write. */
+  viewerKey?: string;
 }
 const LIMIT = 1024 * 1024;
 
@@ -33,17 +34,10 @@ function loadUi(): Map<string, { body: Buffer; type: string }> {
   return files;
 }
 const reserved = new Set(['principal', 'device', 'scope', 'verified', 'actor', 'attribution', 'agent', 'session', '__proto__', 'constructor', 'prototype']);
-const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
-/**
- * A request from this machine, addressed to localhost, and not relayed by a proxy or
- * tunnel. A proxy on the same machine (cloudflared, Caddy) connects from loopback too,
- * so its Host header or forwarding headers must rule it out.
- */
-function fromThisMachine(request: http.IncomingMessage): boolean {
-  if (!LOOPBACK_ADDRESSES.has(request.socket.remoteAddress ?? '')) return false;
-  if (request.headers['x-forwarded-for'] || request.headers.forwarded || request.headers['cf-connecting-ip']) return false;
-  const host = (request.headers.host ?? '').replace(/:\d+$/u, '');
-  return host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+function sameKey(given: string, key: string): boolean {
+  const a = Buffer.from(given);
+  const b = Buffer.from(key);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 const LOCAL_VIEWER: Actor = { principal: 'local-viewer', device: 'local', scope: 'ro', verified: false };
 function record(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === 'object' && !Array.isArray(value); }
@@ -92,7 +86,7 @@ export async function startServer(store: ServerStore, options: ServerOptions = {
   const ui = loadUi();
   const server = http.createServer({ requestTimeout: 15000, headersTimeout: 10000, keepAliveTimeout: 5000, maxHeaderSize: 16384 }, (request, response) => {
     void (async () => {
-      if (request.method === 'GET' && request.url === '/health') { reply(response, 200, { ok: true, version: VERSION, queen: options.localViewer !== true }); return; }
+      if (request.method === 'GET' && request.url === '/health') { reply(response, 200, { ok: true, version: VERSION, queen: options.viewerKey === undefined }); return; }
       const page = request.method === 'GET' || request.method === 'HEAD' ? ui.get((request.url ?? '').split('?')[0]!) : undefined;
       if (page) {
         response.writeHead(200, { 'content-type': page.type, 'cache-control': 'no-cache', 'content-security-policy': UI_POLICY, 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' });
@@ -102,8 +96,8 @@ export async function startServer(store: ServerStore, options: ServerOptions = {
       if (request.method !== 'POST' || request.url !== '/v1/call') throw new HiveNoteError('not_found', 'Not found', 404);
       // Authentication precedes parsing, authorization, and idempotency lookup.
       const authorization = request.headers.authorization;
-      const viewer = !authorization && options.localViewer === true && fromThisMachine(request);
-      if (!viewer && (!authorization || !/^Bearer [^\s]+$/u.test(authorization))) throw new HiveNoteError('unauthorized', 'Bearer authentication required', 401);
+      if (!authorization || !/^Bearer [^\s]+$/u.test(authorization)) throw new HiveNoteError('unauthorized', 'Bearer authentication required', 401);
+      const viewer = options.viewerKey !== undefined && sameKey(authorization.slice(7), options.viewerKey);
       const actor = viewer ? { ...LOCAL_VIEWER } : { ...store.authenticate(authorization!.slice(7)) };
       if (request.headers['content-type']?.split(';')[0]?.trim().toLowerCase() !== 'application/json') throw new HiveNoteError('unsupported_media_type', 'Content-Type must be application/json', 415);
       const length = Number(request.headers['content-length'] ?? 0);
@@ -129,7 +123,11 @@ export async function startServer(store: ServerStore, options: ServerOptions = {
   server.setTimeout(15000, socket => socket.destroy());
   server.on('clientError', (_error, socket) => { if (socket.writable) socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n'); });
   await new Promise<void>((resolve, reject) => {
-    const onError = (error: Error): void => { reject(error); };
+    const onError = (error: NodeJS.ErrnoException): void => {
+      reject(error.code === 'EADDRINUSE'
+        ? new HiveNoteError('port_in_use', `Port ${port} is already in use. If hivenote serve is running there, its dashboard is at http://127.0.0.1:${port}/; otherwise choose another with --port.`, 409)
+        : error);
+    };
     server.once('error', onError);
     server.listen(port, host, () => { server.off('error', onError); resolve(); });
   });

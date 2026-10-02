@@ -42,7 +42,8 @@ function listing(notes: Brief[], value: { total?: number; offset?: number; has_m
 
 function notePage(note: Note, updates: Update[]): string {
   const lines = [bold(note.name), dim(note.description)];
-  if (note.kind === 'task') lines.push(dim(`Task · ${note.status ?? 'todo'}${note.claimed_by ? ` · claimed by ${note.claimed_by}` : ''}`));
+  const task = note.kind === 'task' ? `Task · ${note.status ?? 'todo'}${note.claimed_by ? ` · claimed by ${note.claimed_by}` : ''} · ` : '';
+  lines.push(dim(`${task}rev ${note.rev}`));
   if (note.content) lines.push('', note.content);
   const mine = updates.filter(update => update.note_id === note.id && update.body);
   if (mine.length) {

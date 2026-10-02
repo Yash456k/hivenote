@@ -15,24 +15,35 @@ const PARAMETERS: Record<Method, readonly string[]> = {
   read: ['ids', 'names'],
   search: ['query', 'offset', 'limit', 'detail'],
   create: ['id', 'name', 'description', 'content', 'kind', 'metadata', 'status', 'due_at', 'op_id'],
-  edit: ['id', 'old_str', 'new_str', 'base_rev', 'op_id'],
-  replace: ['id', 'content', 'name', 'description', 'metadata', 'base_rev', 'op_id'],
-  append: ['id', 'body', 'op_id'],
-  delete: ['id', 'base_rev', 'op_id'],
-  history: ['id', 'offset', 'limit'],
-  revision: ['id', 'rev'],
-  restore: ['id', 'rev', 'base_rev', 'op_id'],
+  edit: ['id', 'note', 'old_str', 'new_str', 'base_rev', 'op_id'],
+  replace: ['id', 'note', 'content', 'name', 'description', 'metadata', 'base_rev', 'op_id'],
+  append: ['id', 'note', 'body', 'op_id'],
+  delete: ['id', 'note', 'base_rev', 'op_id'],
+  history: ['id', 'note', 'offset', 'limit'],
+  revision: ['id', 'note', 'rev'],
+  restore: ['id', 'note', 'rev', 'base_rev', 'op_id'],
   changes: ['since', 'limit', 'tail'],
-  claim: ['id', 'ttl_seconds', 'force', 'base_rev', 'op_id'],
-  release: ['id', 'force', 'base_rev', 'op_id'],
-  update_task: ['id', 'status', 'due_at', 'metadata', 'base_rev', 'op_id'],
+  claim: ['id', 'note', 'ttl_seconds', 'force', 'base_rev', 'op_id'],
+  release: ['id', 'note', 'force', 'base_rev', 'op_id'],
+  update_task: ['id', 'note', 'status', 'due_at', 'metadata', 'base_rev', 'op_id'],
 };
 
 /** Writes that overwrite state must name the revision they are based on; these may. */
-const REQUIRES_BASE_REV = new Set<Method>(['replace', 'delete', 'restore', 'update_task']);
-const OPTIONAL_BASE_REV = new Set<Method>(['edit', 'claim', 'release']);
+const REQUIRES_BASE_REV = new Set<Method>(['replace', 'delete', 'restore']);
+const OPTIONAL_BASE_REV = new Set<Method>(['edit', 'claim', 'release', 'update_task']);
 
 interface Receipt { note: Note; event_seq: number; op_id: string }
+
+/**
+ * Plain words are searched as words, so names like api-decisions and hosts like
+ * stg.example.com just work. Quotes, parentheses, * or AND/OR/NOT/NEAR switch to
+ * full-text query syntax.
+ */
+function searchQuery(query: string): string {
+  if (/["()*^:]|\b(AND|OR|NOT|NEAR)\b/u.test(query)) return query;
+  const words = query.split(/\s+/u).filter(Boolean);
+  return words.length ? words.map(word => `"${word}"`).join(' ') : query;
+}
 
 export function localActor(): Actor {
   return { principal: 'local', device: 'local', scope: 'rw', verified: false };
@@ -105,7 +116,7 @@ export class SqliteStore implements Store {
       return this.record(note, 'create', p, who, now);
     }
 
-    let note = this.find(p.id, method === 'restore');
+    let note = this.find(p, method === 'restore');
     if (REQUIRES_BASE_REV.has(method)) this.checkRevision(note, p.base_rev);
     if (OPTIONAL_BASE_REV.has(method) && p.base_rev !== undefined) this.checkRevision(note, p.base_rev);
 
@@ -199,8 +210,20 @@ export class SqliteStore implements Store {
     if (!note.deleted_at) this.run('INSERT INTO notes_fts(id,name,description,content) VALUES(?,?,?,?)', note.id, note.name, note.description, note.content);
   }
 
-  private find(noteId: unknown, includeDeleted = false): Note {
-    const row = this.get(`SELECT * FROM notes WHERE id=?${includeDeleted ? '' : ' AND deleted_at IS NULL'}`, id(noteId));
+  /**
+   * The note a method acts on, by name (`note`) or, for the dashboard and older clients, by ID.
+   * With includeDeleted, a name with no live note finds the most recently deleted one.
+   */
+  private find(p: Params, includeDeleted = false): Note {
+    if ((p.id === undefined) === (p.note === undefined)) invalid('Say which note with its name');
+    if (p.note !== undefined) {
+      const name = text(p.note, 'note', LIMITS.name);
+      const row = this.get('SELECT * FROM notes WHERE name=? AND deleted_at IS NULL', name)
+        ?? (includeDeleted ? this.get('SELECT * FROM notes WHERE name=? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC, rowid DESC LIMIT 1', name) : undefined);
+      if (!row) throw new HiveNoteError('not_found', `No note named '${name}'`, 404);
+      return toNote(row);
+    }
+    const row = this.get(`SELECT * FROM notes WHERE id=?${includeDeleted ? '' : ' AND deleted_at IS NULL'}`, id(p.id));
     if (!row) throw new HiveNoteError('not_found', 'Note not found', 404);
     return toNote(row);
   }
@@ -228,7 +251,7 @@ export class SqliteStore implements Store {
       case 'read': return this.read(p);
       case 'search': return this.search(p);
       case 'history': return this.history(p);
-      case 'revision': return { note: this.historical(this.find(p.id, true), p.rev) };
+      case 'revision': return { note: this.historical(this.find(p, true), p.rev) };
       case 'changes': return this.changes(p);
       default: return invalid('Unsupported query');
     }
@@ -289,7 +312,7 @@ export class SqliteStore implements Store {
 
   private search(p: Params): unknown {
     const { limit, offset } = this.page(p);
-    const query = text(p.query, 'query', 1024);
+    const query = searchQuery(text(p.query, 'query', 1024));
     const shape = view(p.detail);
     try {
       const total = Number(this.get('SELECT count(*) AS n FROM notes_fts WHERE notes_fts MATCH ?', query)?.n);
@@ -300,12 +323,12 @@ export class SqliteStore implements Store {
       return { notes, total, offset, has_more: offset + notes.length < total };
     } catch (error) {
       if (error instanceof HiveNoteError) throw error;
-      return invalid('Invalid FTS5 query; use words, quoted phrases, or AND/OR/NOT (balanced quotes/parentheses)');
+      return invalid('Invalid search; check that quotes and parentheses are balanced');
     }
   }
 
   private history(p: Params): unknown {
-    const note = this.find(p.id, true);
+    const note = this.find(p, true);
     const { limit, offset } = this.page(p);
     const total = Number(this.get('SELECT count(*) AS n FROM events WHERE note_id=?', note.id)?.n);
     const events = this.all('SELECT * FROM events WHERE note_id=? ORDER BY seq LIMIT ? OFFSET ?', note.id, limit, offset).map(toEvent);
@@ -353,12 +376,14 @@ export class SqliteStore implements Store {
     return this.all('SELECT id,principal,device,scope,revoked,created_at,revoked_at FROM clients ORDER BY created_at,id');
   }
 
-  tokenRevoke(key: string): void {
+  /** Revoke every active token for a device label, such as laptop. Returns how many. */
+  tokenRevoke(device: string): number {
     this.requireLocalWriter('Read-only actor cannot administer tokens');
-    id(key);
-    transaction(this.db, () => {
-      const result = this.run('UPDATE clients SET revoked=1,revoked_at=coalesce(revoked_at,?) WHERE id=?', new Date().toISOString(), key);
-      if (!result.changes) throw new HiveNoteError('not_found', 'Client not found', 404);
+    text(device, 'device', LIMITS.label);
+    return transaction(this.db, () => {
+      const result = this.run('UPDATE clients SET revoked=1,revoked_at=? WHERE device=? AND revoked=0', new Date().toISOString(), device);
+      if (!result.changes) throw new HiveNoteError('not_found', `No active token for device '${device}' (see hivenote token list)`, 404);
+      return Number(result.changes);
     });
   }
 

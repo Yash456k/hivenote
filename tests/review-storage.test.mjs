@@ -77,7 +77,7 @@ test('cached verified actors cannot replay receipts or read after revocation', a
   const actor = store.authenticate(token.token);
   const request = params(fixture());
   store.execute('create', request, actor);
-  store.tokenRevoke(token.id);
+  store.tokenRevoke(token.device);
   assert.throws(() => store.execute('create', request, actor), e => e.status === 401);
   assert.throws(() => store.execute('list', {}, actor), e => e.status === 401);
 });

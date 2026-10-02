@@ -18,23 +18,23 @@ Each agent session starts without knowing what the last one figured out. HiveNot
 
 Agents use it through the `hivenote` command and a short [skill file](skills/hivenote/SKILL.md) that teaches them when to read and save. On one machine there's nothing to run: the hive is a single SQLite file on your disk. To share it between machines, run `hivenote serve` on one and `hivenote connect` on the others, and every agent on all of them works from the same notes.
 
-Notes can also be tasks. An agent claims a task so nobody else picks it up, appends progress as it goes, and marks it done, while another agent sits in `hivenote wait --name build-api --status done` and carries on the moment it finishes. Agents never silently overwrite each other: a rewrite based on an old version is refused with the current one, so the agent merges and tries again.
+Notes can also be tasks. An agent claims a task so nobody else picks it up, appends progress as it goes, and marks it done, while another agent sits in `hivenote wait build-api --status done` and carries on the moment it finishes. Agents never silently overwrite each other: a rewrite based on an old version is refused with the current one, so the agent merges and tries again.
 
 `hivenote ui` opens the dashboard above, with notes as cards you can drag around, the task board, and a feed of which agent did what, refreshed every two seconds.
 
 | Command | What it does |
 |---|---|
 | `hivenote list` | Every note's name and description |
-| `hivenote read --names 'deploy,api-decisions'` | The full notes, with their latest progress |
+| `hivenote read deploy api-decisions` | The full notes, with their latest progress |
 | `hivenote search 'deploy AND staging'` | Full-text search across all notes |
 | `hivenote create NAME --description '…' --content '…'` | A new note (add `--kind task` for a task) |
 | `hivenote edit NAME --old-str '…' --new-str '…'` | Change one passage |
 | `hivenote append NAME --body '…'` | Add progress without rewriting the note |
 | `hivenote claim NAME` | Take a task |
 | `hivenote update-task NAME --status done` | Move a task along the board |
-| `hivenote wait --name NAME --status done` | Block until another agent finishes it |
+| `hivenote wait NAME --status done` | Block until another agent finishes it |
 
-Notes go by name everywhere, and their IDs work too. Agents get JSON; when you type a command yourself, you get a readable view (`--json` for JSON anyway). `hivenote --help` lists the rest (history, restore, delete, backups), and the [reference](docs/REFERENCE.md) covers all of it in detail.
+Notes are always named by their name. Agents get JSON; when you type a command yourself, you get a readable view (`--json` for JSON anyway). `hivenote --help` lists the rest (history, restore, delete, backups), and the [reference](docs/REFERENCE.md) covers all of it in detail.
 
 ## Run it yourself
 
@@ -52,8 +52,8 @@ Then give your agents the skill. You can tell an agent to do it:
 Or copy it yourself:
 
 ```sh
-cp -r "$(npm root -g)/hivenote/skills/hivenote" ~/.claude/skills/   # Claude Code
-cp -r "$(npm root -g)/hivenote/skills/hivenote" ~/.codex/skills/    # Codex
+mkdir -p ~/.claude/skills && cp -r "$(npm root -g)/hivenote/skills/hivenote" ~/.claude/skills/   # Claude Code
+mkdir -p ~/.codex/skills && cp -r "$(npm root -g)/hivenote/skills/hivenote" ~/.codex/skills/      # Codex
 ```
 
 ### One queen, many workers

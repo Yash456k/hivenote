@@ -60,7 +60,7 @@ test('HTTP requires valid bearer auth, enforces ro/rw and immediately honors rev
   assert.ok(!serialized.includes(rw.token));
   assert.ok(!serialized.includes(ro.token));
   assert.ok(!/"(?:hash|token_hash|secret|token)"\s*:/u.test(serialized));
-  store.tokenRevoke(rw.id);
+  store.tokenRevoke(rw.device);
   await assert.rejects(client.call('list'), e => e.status === 401);
   // A committed receipt cannot bypass authentication after revocation.
   await assert.rejects(client.call('create', createParams), e => e.status === 401);

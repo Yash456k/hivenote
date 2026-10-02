@@ -26,23 +26,6 @@ function textFlag(flags: Flags, key: string): string | undefined {
   return file === undefined ? inline : readTextFile(file);
 }
 
-/** Repeated --id/--name flags, comma-separated lists, or JSON arrays. */
-function selectors(flags: Flags, singular: string, plural: string): string[] | undefined {
-  const items = [...flags.get(singular) ?? []];
-  for (const value of flags.get(plural) ?? []) {
-    if (value.trimStart().startsWith('[')) {
-      const parsed = jsonFlag(value, plural);
-      if (!Array.isArray(parsed) || parsed.some(item => typeof item !== 'string')) {
-        throw new HiveNoteError('invalid_args', `${plural} must be a JSON string array or comma-separated list`);
-      }
-      items.push(...parsed as string[]);
-    } else {
-      items.push(...value.split(','));
-    }
-  }
-  return items.length ? items : undefined;
-}
-
 export function parameters(method: Method, flags: Flags, positional: string[]): Params {
   const raw = flag(flags, 'params');
   const input = raw === undefined ? {} : jsonFlag(raw, '--params');
@@ -53,8 +36,8 @@ export function parameters(method: Method, flags: Flags, positional: string[]): 
     params[key] = value;
   };
 
-  // read turns --id/--name into arrays below; for other methods they are plain fields.
-  const strings = [...(method === 'read' ? [] : ['id', 'name']), 'description', 'query', 'kind', 'status'];
+  // --name is only replace's rename; the note itself is always the positional name.
+  const strings = ['name', 'description', 'query', 'kind', 'status'];
   for (const key of strings) if (flag(flags, key) !== undefined) set(key, flag(flags, key));
   for (const key of ['base-rev', 'rev', 'offset', 'limit', 'since', 'ttl-seconds', 'tail']) {
     const value = flag(flags, key);
@@ -66,26 +49,14 @@ export function parameters(method: Method, flags: Flags, positional: string[]): 
   if (flags.has('metadata')) set('metadata', jsonFlag(flag(flags, 'metadata')!, '--metadata'));
   if (flags.has('op-id')) set('op_id', flag(flags, 'op-id'));
 
+  // Notes are always named by the positional arguments: `read a b`, `append a`, `create a`.
   if (method === 'read') {
-    const ids = selectors(flags, 'id', 'ids');
-    const names = selectors(flags, 'name', 'names');
-    if (ids) set('ids', ids);
-    if (names) set('names', names);
-    if (positional.length) {
-      if (Object.hasOwn(params, 'ids') || Object.hasOwn(params, 'names')) throw new HiveNoteError('invalid_args', 'Use positional IDs OR selector flags');
-      // Note IDs are always UUIDs, so anything else is a name.
-      const names = positional.filter(value => !UUID.test(value));
-      if (names.length && names.length < positional.length) throw new HiveNoteError('invalid_args', 'Use IDs or names, not both');
-      set(names.length ? 'names' : 'ids', positional);
-    }
-    if (Object.hasOwn(params, 'ids') && Object.hasOwn(params, 'names')) throw new HiveNoteError('invalid_args', 'Use IDs OR names, not both');
-  } else {
-    if (positional.length > 1 && method !== 'search') throw new HiveNoteError('invalid_args', 'Unexpected positional arguments');
-    // The one positional argument is the name (create), the query (search), or the note ID.
-    if (positional.length) {
-      const key = method === 'create' ? 'name' : method === 'search' ? 'query' : 'id';
-      set(key, method === 'search' ? positional.join(' ') : positional[0]);
-    }
+    if (positional.length) set('names', positional);
+    else if (!Object.hasOwn(params, 'names') && !Object.hasOwn(params, 'ids')) throw new HiveNoteError('invalid_args', 'read takes one or more note names: hivenote read NAME...');
+  } else if (positional.length) {
+    if (positional.length > 1 && method !== 'search') throw new HiveNoteError('invalid_args', 'Unexpected extra arguments; quote text that has spaces');
+    const key = method === 'create' ? 'name' : method === 'search' ? 'query' : 'note';
+    set(key, method === 'search' ? positional.join(' ') : positional[0]);
   }
 
   const content = textFlag(flags, 'content');
@@ -108,16 +79,17 @@ export function parameters(method: Method, flags: Flags, positional: string[]): 
       if (!Object.hasOwn(params, 'content')) params.content = '';
     }
   }
+  if ((method === 'replace' || method === 'delete' || method === 'restore') && !Object.hasOwn(params, 'base_rev')) {
+    throw new HiveNoteError('invalid_args', `${method} needs --base-rev N, the note's current rev (shown by hivenote read), so it can't undo changes you haven't seen`);
+  }
   return clientParams(method, params);
 }
 
 const TASK_STATUSES: TaskStatus[] = ['todo', 'doing', 'done', 'cancelled'];
 
 export function waitOptions(flags: Flags, positional: string[]): WaitOptions {
-  if (positional.length) throw new HiveNoteError('invalid_args', 'wait takes --name NAME or --id ID, not positional arguments');
-  const id = flag(flags, 'id');
-  const name = flag(flags, 'name');
-  if ((id === undefined) === (name === undefined)) throw new HiveNoteError('invalid_args', 'wait requires exactly one of --name or --id');
+  if (positional.length !== 1) throw new HiveNoteError('invalid_args', 'wait takes one note name: hivenote wait NAME [--status done]');
+  const name = positional[0]!;
 
   const status = flag(flags, 'status');
   if (status !== undefined && !TASK_STATUSES.includes(status as TaskStatus)) {
@@ -140,7 +112,7 @@ export function waitOptions(flags: Flags, positional: string[]): WaitOptions {
   }
 
   return {
-    selector: id !== undefined ? { id } : { name: name! },
+    name,
     ...(status !== undefined ? { status: status as TaskStatus } : {}),
     timeoutSeconds,
     intervalMs,

@@ -16,18 +16,17 @@ test('native CLI flags, UTF-8 file/stdin inputs and task aliases preserve litera
   const created = await cliJson([...args, 'create', 'Native flag note', '--description', 'inert', '--content-file', file], { env, cwd: dir });
   assert.equal(created.note.content, content);
   await assert.rejects(access(join(dir, 'MUST_NOT_EXIST')));
-  assert.equal((await cliJson([...args, 'read', '--names', '["Native flag note"]'], { env })).notes[0].id, created.note.id);
-  const replaced = await cliJson([...args, 'replace', created.note.id, '--base-rev', '1', '--content-file', '-'], { env, input: 'stdin Résumé\n' });
+  assert.equal((await cliJson([...args, 'read', 'Native flag note'], { env })).notes[0].id, created.note.id);
+  const replaced = await cliJson([...args, 'replace', 'Native flag note', '--base-rev', '1', '--content-file', '-'], { env, input: 'stdin Résumé\n' });
   assert.equal(replaced.note.content, 'stdin Résumé\n');
-  const edited = await cliJson([...args, 'edit', created.note.id, '--old-str', 'Résumé', '--new-str', 'EDITED', '--base-rev', '2'], { env });
+  const edited = await cliJson([...args, 'edit', 'Native flag note', '--old-str', 'Résumé', '--new-str', 'EDITED', '--base-rev', '2'], { env });
   assert.equal(edited.note.content, 'stdin EDITED\n');
-  const appended = await cliJson([...args, 'append', created.note.id, '--body-file', '-'], { env, input: 'activity 日本語' });
+  const appended = await cliJson([...args, 'append', 'Native flag note', '--body-file', '-'], { env, input: 'activity 日本語' });
   assert.equal(appended.note.rev, 3);
   for (const bad of [
     [...args, 'create', 'bad', '--content', 'x', '--content-file', file],
-    [...args, 'replace', created.note.id, '--base-rev', 'NaN', '--content', 'x'],
+    [...args, 'replace', 'Native flag note', '--base-rev', 'NaN', '--content', 'x'],
     [...args, 'create', '--params', '[1,2]'],
-    [...args, 'read', '--names', '[2]'],
     [...args, 'list', '--unknown-flag', 'x'],
     [...args, 'list', '--limit'],
   ]) assert.notEqual((await run(process.execPath, [cli, ...bad], { env })).code, 0);
@@ -50,7 +49,7 @@ test('CLI token administration and backup are real, omit secrets and refuse remo
   const created = await cliJson([...args, 'create', '--params', JSON.stringify(fixture({ name: 'CLI backed up' }))], { env });
   const backup = join(dir, 'CLI backup 日本語.sqlite');
   assert.equal((await cliJson([...args, 'backup', backup], { env })).path, backup);
-  assert.equal((await cliJson(['--db', backup, 'read', created.note.id], { env })).notes[0].name, 'CLI backed up');
+  assert.equal((await cliJson(['--db', backup, 'read', 'CLI backed up'], { env })).notes[0].name, 'CLI backed up');
   const store = new SqliteStore(db, actor());
   const server = await startServer(store, { host: '127.0.0.1', port: 0 });
   t.after(async () => { await closeServer(server); store.close(); });
@@ -60,7 +59,7 @@ test('CLI token administration and backup are real, omit secrets and refuse remo
     assert.notEqual(result.code, 0);
   }
   await assert.rejects(access(join(dir, 'forbidden.sqlite')));
-  await cliJson([...args, 'token', 'revoke', token.id], { env });
+  await cliJson([...args, 'token', 'revoke', token.device], { env });
   assert.throws(() => store.authenticate(token.token), e => e.status === 401);
 });
 
@@ -74,7 +73,7 @@ test('persisted config is sandboxed, flags win over it for one command, token fi
   assert.equal(config.db, db);
   if (process.platform !== 'win32') assert.equal((await stat(join(home, 'config.json'))).mode & 0o777, 0o600);
   const created = await cliJson(['create', '--params', JSON.stringify(fixture({ name: 'via config' }))], { env });
-  assert.equal((await cliJson(['read', created.note.id], { env })).notes[0].id, created.note.id);
+  assert.equal((await cliJson(['read', 'via config'], { env })).notes[0].id, created.note.id);
   const store = new SqliteStore(join(dir, 'remote.sqlite'), actor());
   const token = store.tokenCreate('config-token', 'ro');
   const server = await startServer(store, { host: '127.0.0.1', port: 0 });

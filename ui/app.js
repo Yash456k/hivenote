@@ -136,7 +136,7 @@ class Unauthorized extends Error {}
 
 async function call(method, params = {}) {
   const headers = { 'content-type': 'application/json' };
-  // On the machine running `hivenote ui` no token is needed; elsewhere one is.
+  // A token pasted for `hivenote serve`, or the key `hivenote ui` put in the link it opened.
   if (state.token) headers.authorization = `Bearer ${state.token}`;
   const response = await fetch('/v1/call', { method: 'POST', headers, body: JSON.stringify({ method, params }) });
   const data = await response.json().catch(() => ({}));
@@ -470,14 +470,15 @@ async function poll() {
   try {
     const page = await call('changes', { since: state.cursor, limit: 100 });
     if (page.events.length) {
-      state.cursor = page.cursor;
       await refresh();
       if ($('search').value.trim()) await search($('search').value);
+      // Move past these events only once the page shows them, so a failed refresh is retried.
+      state.cursor = page.cursor;
       celebrate(addToFeed(page.events, true));
     }
     setLive('live');
   } catch (error) {
-    if (error instanceof Unauthorized) return showConnect('That token no longer works. Paste a new one.');
+    if (error instanceof Unauthorized) return showConnect(state.viewer ? EXPIRED : 'That token no longer works. Paste a new one.');
     setLive('offline');
   }
   schedule();
@@ -497,15 +498,19 @@ async function start() {
     setLive('live');
     schedule();
   } catch (error) {
-    if (error instanceof Unauthorized) return showConnect(state.token ? 'That token was not accepted. Check it and try again.' : '');
+    // A page from hivenote ui needs the key in the link it opened; a queen's page needs a token.
+    if (error instanceof Unauthorized) return showConnect(state.viewer || !state.queen ? EXPIRED : state.token ? 'That token was not accepted. Check it and try again.' : '');
     setLive('offline');
     setTimeout(start, 3000);
   }
 }
 
+const EXPIRED = 'This dashboard link has expired. Run hivenote ui again to open a fresh one.';
+
 function showConnect(reason) {
   clearTimeout(timer);
-  if (state.token) remember(TOKEN_KEY, null);
+  if (state.viewer) { try { sessionStorage.removeItem(VIEWER_KEY); } catch {} state.viewer = false; }
+  else if (state.token) remember(TOKEN_KEY, null);
   state.token = '';
   $('hive').hidden = true;
   $('connect').hidden = false;
@@ -520,8 +525,9 @@ $('where').textContent = location.host;
 $('brand-bee').append(bee());
 $('connect-bee').append(bee());
 // The machine that serves the hive to the others is the queen, so its bees wear a crown.
-fetch('/health').then(response => response.json()).then(health => {
-  if (!health.queen) return;
+const checked = fetch('/health').then(response => response.json()).then(health => {
+  state.queen = health.queen === true;
+  if (!state.queen) return;
   document.body.classList.add('queen');
   $('where').textContent = `Queen bee · ${location.host}`;
 }).catch(() => {});
@@ -542,5 +548,16 @@ new ResizeObserver(() => layout()).observe($('notes'));
 setInterval(() => document.querySelectorAll('time[datetime]').forEach(node => { node.textContent = ago(node.getAttribute('datetime')); }), 30000);
 
 try { state.order = JSON.parse(remember(ORDER_KEY) ?? '[]'); } catch { state.order = []; }
-state.token = remember(TOKEN_KEY) ?? '';
-start();
+// `hivenote ui` opens this page with a key for that launch in the URL's #fragment, which is never
+// sent to any server. Keep it for this tab only and take it out of the address bar.
+const VIEWER_KEY = 'hivenote-viewer-key';
+const fromLink = new URLSearchParams(location.hash.slice(1)).get('k');
+if (fromLink) {
+  try { sessionStorage.setItem(VIEWER_KEY, fromLink); } catch {}
+  history.replaceState(null, '', location.pathname + location.search);
+}
+let viewerKey = fromLink;
+if (!viewerKey) { try { viewerKey = sessionStorage.getItem(VIEWER_KEY); } catch {} }
+state.viewer = Boolean(viewerKey);
+state.token = viewerKey || (remember(TOKEN_KEY) ?? '');
+checked.then(start);

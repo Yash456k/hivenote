@@ -26,15 +26,15 @@ From source: `npm ci`, then use `node dist/cli.js` in place of `hivenote` (`npm 
 ```sh
 hivenote create build-context --description 'Current design decisions' --content-file design.txt
 hivenote list --limit 20
-hivenote read --names '["build-context","acceptance"]'
+hivenote read build-context acceptance
 hivenote search 'design AND decisions'
-hivenote edit NOTE_UUID --old-str 'old wording' --new-str 'new wording' --base-rev 1
-hivenote replace NOTE_UUID --base-rev 2 --content-file - < replacement.txt
-hivenote append NOTE_UUID --body-file progress.txt
-hivenote history NOTE_UUID --limit 20
-hivenote revision NOTE_UUID --rev 1
-hivenote delete NOTE_UUID --base-rev 3
-hivenote restore NOTE_UUID --rev 1 --base-rev 4
+hivenote edit build-context --old-str 'old wording' --new-str 'new wording'
+hivenote replace build-context --base-rev 2 --content-file - < replacement.txt
+hivenote append build-context --body-file progress.txt
+hivenote history build-context --limit 20
+hivenote revision build-context --rev 1
+hivenote delete build-context --base-rev 3
+hivenote restore build-context --rev 1 --base-rev 4
 hivenote changes --since 0 --limit 100
 ```
 
@@ -54,12 +54,13 @@ need no database, and a mistyped command suggests the closest one.
 `--content`, `--body`, `--old-str`, `--new-str` accept literal strings, including
 empty replacement text. Corresponding `*-file` flags read UTF-8; `-` reads stdin.
 No eval, shell commands or automatic interpretation. `--params '{...}'` exposes
-the same strict method parameter contract for scripts. On the command line, a note
-argument may be its name or its ID: IDs are always UUIDs, so anything else is a name,
-and the CLI looks it up with one `read` before the call. `read a b` reads by names,
-`read ID ID` by IDs (not mixed). `update-task` without `--base-rev` uses the task's
-current revision; `replace`, `delete` and `restore` still require `--base-rev`.
-Repeated `--name`/`--id` also batch reads.
+the same strict method parameter contract for scripts. Every command names notes by
+their name: `read a b` reads several, and the others take one, as in `append a`.
+`history`, `revision` and `restore` also find a deleted note by its name (the most
+recently deleted one, if the name was used more than once). Notes keep an internal
+ID so renames and reused names never mix up their histories; it appears in JSON
+output but no command asks for it. `replace`, `delete` and `restore` require
+`--base-rev`; `edit`, `claim`, `release` and `update-task` accept it as an extra guard.
 
 Description and content are required in the store API but may be empty;
 CLI create defaults both to empty. Names must be nonblank, globally unique among
@@ -88,16 +89,16 @@ over HTTP to the queen, the one machine that keeps the hive, never to copies of 
 
 ```sh
 hivenote create release-check --kind task --description 'Acceptance checklist' --content-file checklist.txt
-hivenote claim TASK_UUID --ttl-seconds 900
-hivenote update-task TASK_UUID --base-rev 2 --status doing --due-at 2030-01-02T03:04:05Z
-hivenote release TASK_UUID
+hivenote claim release-check --ttl-seconds 900
+hivenote update-task release-check --status doing --due-at 2030-01-02T03:04:05Z
+hivenote release release-check
 ```
 
 To hand work between agents, one agent waits while another finishes:
 
 ```sh
-hivenote wait --name release-check --status done   # blocks until the task is done
-hivenote wait --id NOTE_UUID                       # blocks until any change or append
+hivenote wait release-check --status done   # blocks until the task is done
+hivenote wait build-context                 # blocks until any change or append
 ```
 
 `wait` prints the note and its latest appended progress when the condition is met,
@@ -105,7 +106,7 @@ and exits nonzero on timeout (default 540 seconds; `--timeout-seconds 0` waits
 forever) or if the note is deleted. It checks with `read` every 5 seconds
 (`--interval-seconds 60` for long work), so it works the same against a local database or a remote server
 and needs only a read-only token. It never starts agents or runs commands: a user
-script can do that, e.g. `hivenote wait --name X --status done && your-command`.
+script can do that, e.g. `hivenote wait X --status done && your-command`.
 
 Statuses: `todo`, `doing`, `done`, `cancelled`; `--due-at null` clears a due date.
 Claims are atomic cooperative leases, not scheduling or authorization. Expiry is
@@ -142,7 +143,7 @@ Store it privately (mode 0600 on POSIX); the database keeps only its SHA-256 has
 Avoid shared logs or shell-history secrets. A client may use `HIVENOTE_TOKEN` or a
 private file; a configured token file takes precedence over the environment.
 Tokens/admin/backup/config are local-only, never RPC/MCP methods. Revoke locally
-with `hivenote --db PATH token revoke CLIENT_UUID`; revocation also denies receipt
+with `hivenote --db PATH token revoke DEVICE` (every active token for that device name); revocation also denies receipt
 replays. `ro` can read all notes/history, `rw` can mutate all notes; there are no
 per-note ACLs or separate force-operation roles.
 
@@ -171,7 +172,7 @@ Lower-level equivalents:
 ```sh
 hivenote --url https://notes.example.com --token-file /private/token.txt list
 hivenote config set --url https://notes.example.com --token-file /private/token.txt
-hivenote read --names '["build-context"]'
+hivenote read build-context
 hivenote config show
 hivenote config reset
 hivenote config set --db /path/on/local/disk/notes.db
@@ -206,11 +207,13 @@ hivenote ui            # opens http://127.0.0.1:7391 in your browser
 A live, read-only view of the hive: notes as rearrangeable cards (the order is
 saved in your browser only and never affects agents), the task board, and a
 feed of what each agent is doing, refreshed every two seconds. `hivenote ui`
-lets this machine's browser read without a token; writes are never allowed
-from the page. `hivenote serve` also serves the dashboard at `/`, and there
+opens the page with a key made for that launch, carried in the link's `#` part
+(which browsers never send to any server); only a page holding that key can read,
+and nothing can write from the page. Restarting `ui` makes a new key. If 7391 is
+taken, `ui` uses the next free port. `hivenote serve` also serves the dashboard at `/`, and there
 every viewer pastes a token once (`hivenote token create --device browser
---scope ro`), which that browser remembers. Requests relayed by a proxy or
-tunnel always need a token.
+--scope ro`), which that browser remembers. A request with neither a token nor
+the `ui` key is refused, wherever it comes from.
 
 ## Agent skill
 

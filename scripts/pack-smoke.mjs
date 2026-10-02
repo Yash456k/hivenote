@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { readFile, rm, access, mkdir, copyFile } from 'node:fs/promises';
 import { sandbox, run, root, fixture } from '../tests/helpers.mjs';
 import { connectMcp, mcpSmoke } from '../tests/mcp-helpers.mjs';
@@ -8,9 +8,15 @@ import { connectMcp, mcpSmoke } from '../tests/mcp-helpers.mjs';
 const dir = await sandbox(null, 'pack-smoke');
 const env = { HIVENOTE_HOME: join(dir, 'isolated config'), npm_config_cache: join(dir, 'npm-cache') };
 let mcp;
+// Windows starts npm and installed commands through .cmd launchers, which Node can only run
+// via a shell that would mangle these paths. There, run npm's script and the installed
+// package's cli.js with node directly; elsewhere use the real commands.
+const windows = process.platform === 'win32';
+const npm = windows ? [process.execPath, [join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')]] : ['npm', []];
 async function checked(command, args, options = {}) {
-  const result = await run(command, args, { env, timeout: 180_000, ...options });
-  assert.equal(result.code, 0, `${command} ${args.join(' ')}\n${result.stderr}\n${result.stdout}`);
+  const [file, before] = command === 'npm' ? npm : Array.isArray(command) ? command : [command, []];
+  const result = await run(file, [...before, ...args], { env, timeout: 180_000, ...options });
+  assert.equal(result.code, 0, `${file} ${args.join(' ')}\n${result.stderr}\n${result.stdout}`);
   return result;
 }
 function npmJson(stdout) {
@@ -36,18 +42,20 @@ try {
   await access(tarball);
   const prefix = join(dir, 'installed prefix 日本語');
   await checked('npm', ['install', '--prefix', prefix, '--no-save', '--no-audit', '--no-fund', tarball]);
-  const bin = join(prefix, 'node_modules', '.bin', process.platform === 'win32' ? 'hivenote.cmd' : 'hivenote');
+  const bin = windows
+    ? [process.execPath, [join(prefix, 'node_modules', 'hivenote', 'dist', 'cli.js')]]
+    : [join(prefix, 'node_modules', '.bin', 'hivenote'), []];
   const help = await checked(bin, ['--help'], { cwd: prefix });
   assert.match(help.stdout, /hivenote|usage/iu);
   const version = await checked(bin, ['--version'], { cwd: prefix });
   assert.ok(version.stdout.includes(pkg.version));
   const db = join(prefix, 'installed notes with spaces 日本語.sqlite');
   const created = JSON.parse((await checked(bin, ['--db', db, 'create', '--params', JSON.stringify(fixture({ name: 'Installed Résumé 日本語', content: 'tarball real content' }))], { cwd: prefix })).stdout);
-  const read = JSON.parse((await checked(bin, ['--db', db, 'read', '--params', JSON.stringify({ ids: [created.note.id] })], { cwd: prefix })).stdout);
+  const read = JSON.parse((await checked(bin, ['--db', db, 'read', created.note.name], { cwd: prefix })).stdout);
   assert.equal(read.notes[0].content, 'tarball real content');
   await access(db);
   // The installed CLI resolves its own shipped modules and dependencies.
-  mcp = await connectMcp(bin, ['--db', join(prefix, 'installed MCP 日本語.sqlite'), 'mcp'], env);
+  mcp = await connectMcp(bin[0], [...bin[1], '--db', join(prefix, 'installed MCP 日本語.sqlite'), 'mcp'], env);
   await mcpSmoke(mcp.client, 'Installed MCP 日本語');
   await mcp.client.close();
   mcp = null;

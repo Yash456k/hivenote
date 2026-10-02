@@ -8,34 +8,34 @@ export interface Arguments { positional: string[]; flags: Flags }
 const BOOLEAN_FLAGS = new Set(['help', 'version', 'json', 'force', 'full', 'no-open']);
 const VALUE_FLAGS = [
   'db', 'url', 'token-file', 'agent', 'session', 'timeout-ms', 'retries', 'params', 'op-id',
-  'id', 'ids', 'name', 'names', 'description', 'content', 'content-file', 'body', 'body-file',
+  'name', 'description', 'content', 'content-file', 'body', 'body-file',
   'old-str', 'old-str-file', 'new-str', 'new-str-file', 'base-rev', 'rev', 'query', 'offset', 'limit',
   'kind', 'status', 'due-at', 'metadata', 'since', 'ttl-seconds', 'device', 'scope', 'destination',
   'host', 'port', 'timeout-seconds', 'interval-seconds', 'interval-ms', 'tail',
 ];
 const KNOWN_FLAGS = new Set([...VALUE_FLAGS, ...BOOLEAN_FLAGS]);
-/** Flags that may repeat (read accepts several IDs or names). */
-const REPEATABLE = ['id', 'ids', 'name', 'names'];
+/** Flags that may repeat. */
+const REPEATABLE: string[] = [];
 /** Flags every command accepts. */
 const GLOBAL_FLAGS = ['db', 'url', 'token-file', 'agent', 'session', 'help', 'version', 'json'];
 
 const TEXT_FLAGS = ['content', 'content-file', 'body', 'body-file'];
 const METHOD_FLAGS: Record<Method, string[]> = {
   list: ['offset', 'limit', 'kind', 'status', 'full'],
-  read: ['id', 'ids', 'name', 'names'],
+  read: [],
   search: ['query', 'offset', 'limit', 'full'],
-  create: ['id', 'name', 'description', 'kind', 'status', 'due-at', 'metadata', ...TEXT_FLAGS],
-  edit: ['id', 'base-rev', 'old-str', 'old-str-file', 'new-str', 'new-str-file', ...TEXT_FLAGS],
-  replace: ['id', 'base-rev', 'name', 'description', 'metadata', ...TEXT_FLAGS],
-  append: ['id', ...TEXT_FLAGS],
-  delete: ['id', 'base-rev'],
-  history: ['id', 'offset', 'limit'],
-  revision: ['id', 'rev'],
-  restore: ['id', 'rev', 'base-rev'],
+  create: ['description', 'kind', 'status', 'due-at', 'metadata', ...TEXT_FLAGS],
+  edit: ['base-rev', 'old-str', 'old-str-file', 'new-str', 'new-str-file', ...TEXT_FLAGS],
+  replace: ['base-rev', 'name', 'description', 'metadata', ...TEXT_FLAGS],
+  append: [...TEXT_FLAGS],
+  delete: ['base-rev'],
+  history: ['offset', 'limit'],
+  revision: ['rev'],
+  restore: ['rev', 'base-rev'],
   changes: ['since', 'limit', 'tail'],
-  claim: ['id', 'ttl-seconds', 'force', 'base-rev'],
-  release: ['id', 'force', 'base-rev'],
-  update_task: ['id', 'base-rev', 'status', 'due-at', 'metadata'],
+  claim: ['ttl-seconds', 'force', 'base-rev'],
+  release: ['force', 'base-rev'],
+  update_task: ['base-rev', 'status', 'due-at', 'metadata'],
 };
 
 const COMMANDS = [
@@ -66,12 +66,12 @@ export function unknownCommand(command: string): HiveNoteError {
 function commandFlags(command: string, action: string | undefined): string[] {
   if (isMethod(command)) return [...METHOD_FLAGS[command], 'params', 'timeout-ms', 'retries', ...(MUTATIONS.has(command) ? ['op-id'] : [])];
   switch (command) {
-    case 'token': return action === 'create' ? ['device', 'scope'] : action === 'revoke' ? ['id'] : [];
+    case 'token': return action === 'create' ? ['device', 'scope'] : action === 'revoke' ? ['device'] : [];
     case 'backup': return ['destination'];
     case 'serve': return ['host', 'port'];
     case 'ui': return ['host', 'port', 'no-open'];
     case 'mcp': return ['timeout-ms', 'retries'];
-    case 'wait': return ['id', 'name', 'status', 'timeout-seconds', 'interval-seconds', 'interval-ms', 'timeout-ms', 'retries'];
+    case 'wait': return ['status', 'timeout-seconds', 'interval-seconds', 'interval-ms', 'timeout-ms', 'retries'];
     case 'status': return ['timeout-ms'];
     case 'config': case 'show': case 'connect': case 'disconnect': return [];
     default: throw unknownCommand(command);
@@ -115,7 +115,7 @@ export function validateFlags(command: string, action: string | undefined, flags
   const allowed = new Set([...GLOBAL_FLAGS, ...commandFlags(command, action)]);
   for (const [key, values] of flags) {
     if (!allowed.has(key)) throw new HiveNoteError('invalid_args', `Option --${key} is not supported by ${command}`);
-    if (values.length > 1 && !(command === 'read' && REPEATABLE.includes(key))) {
+    if (values.length > 1 && !REPEATABLE.includes(key)) {
       throw new HiveNoteError('invalid_args', `Option --${key} may only be supplied once for ${command}`);
     }
   }

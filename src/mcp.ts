@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { HttpStore } from './client.js';
 import { clientParams, METHODS, MUTATIONS, HiveNoteError, VERSION, type Actor, type Method, type Params, type Store } from './contract.js';
 
-const id = z.string().min(1);
+const note = z.string().min(1).describe("The note's name");
 const integer = z.number().int().nonnegative();
 const revision = z.number().int().positive();
 const metadata = z.record(z.string(), z.unknown());
@@ -16,24 +16,24 @@ const detail = z.enum(['brief', 'full']).optional().describe("'brief' (default):
 const operation = { op_id: z.string().min(1).optional().describe('Stable operation ID for safe mutation retries; generated if omitted.') };
 const schemas: Record<Method, z.ZodType> = {
   list: z.object({ ...page, kind: kind.optional(), status: status.optional(), detail }).strict(),
-  read: z.object({ ids: z.array(id).min(1).optional(), names: z.array(z.string().min(1)).min(1).optional() }).strict().refine(p => (p.ids !== undefined) !== (p.names !== undefined), 'Use exactly one of ids or names'),
+  read: z.object({ names: z.array(z.string().min(1)).min(1) }).strict(),
   search: z.object({ query: z.string(), ...page, detail }).strict(),
-  create: z.object({ id: id.optional(), name: z.string().min(1), description: z.string(), content: z.string(), kind: kind.optional(), metadata: metadata.optional(), status: status.optional(), due_at: due.optional(), ...operation }).strict(),
-  edit: z.object({ id, old_str: z.string().min(1), new_str: z.string(), base_rev: revision.optional(), ...operation }).strict(),
-  replace: z.object({ id, content: z.string().optional(), name: z.string().min(1).optional(), description: z.string().optional(), metadata: metadata.optional(), base_rev: revision, ...operation }).strict(),
-  append: z.object({ id, body: z.string(), ...operation }).strict(),
-  delete: z.object({ id, base_rev: revision, ...operation }).strict(),
-  history: z.object({ id, ...page }).strict(),
-  revision: z.object({ id, rev: revision }).strict(),
-  restore: z.object({ id, rev: revision, base_rev: revision, ...operation }).strict(),
+  create: z.object({ name: z.string().min(1), description: z.string(), content: z.string(), kind: kind.optional(), metadata: metadata.optional(), status: status.optional(), due_at: due.optional(), ...operation }).strict(),
+  edit: z.object({ note, old_str: z.string().min(1), new_str: z.string(), base_rev: revision.optional(), ...operation }).strict(),
+  replace: z.object({ note, content: z.string().optional(), name: z.string().min(1).optional(), description: z.string().optional(), metadata: metadata.optional(), base_rev: revision, ...operation }).strict(),
+  append: z.object({ note, body: z.string(), ...operation }).strict(),
+  delete: z.object({ note, base_rev: revision, ...operation }).strict(),
+  history: z.object({ note, ...page }).strict(),
+  revision: z.object({ note, rev: revision }).strict(),
+  restore: z.object({ note, rev: revision, base_rev: revision, ...operation }).strict(),
   changes: z.object({ since: integer.optional(), limit: z.number().int().positive().optional(), tail: z.number().int().positive().max(100).optional() }).strict(),
-  claim: z.object({ id, ttl_seconds: z.number().int().positive().optional(), force: z.boolean().optional(), base_rev: revision.optional(), ...operation }).strict(),
-  release: z.object({ id, force: z.boolean().optional(), base_rev: revision.optional(), ...operation }).strict(),
-  update_task: z.object({ id, base_rev: revision, status: status.optional(), due_at: due.optional(), metadata: metadata.optional(), ...operation }).strict(),
+  claim: z.object({ note, ttl_seconds: z.number().int().positive().optional(), force: z.boolean().optional(), base_rev: revision.optional(), ...operation }).strict(),
+  release: z.object({ note, force: z.boolean().optional(), base_rev: revision.optional(), ...operation }).strict(),
+  update_task: z.object({ note, base_rev: revision.optional(), status: status.optional(), due_at: due.optional(), metadata: metadata.optional(), ...operation }).strict(),
 };
 const descriptions: Record<Method, string> = {
   list: 'List notes by name and description (brief by default) to decide what to read. No content.',
-  read: 'Read full notes by a batch of IDs OR exact names. Missing selectors are reported.',
+  read: 'Read full notes by their exact names, with recent progress. Missing names are reported.',
   search: 'Search notes with paginated matching summaries and snippets.',
   create: 'Create a note or task. Name is unique; content is literal data.',
   edit: 'Replace one exact, unique old_str occurrence with new_str. Optional base_rev guards concurrent changes.',
@@ -46,7 +46,7 @@ const descriptions: Record<Method, string> = {
   changes: 'Read the global change feed after since, or the newest `tail` events; continue with the returned cursor.',
   claim: 'Acquire a cooperative expiring claim; ttl_seconds defaults to 900. Claims are advisory.',
   release: 'Release a cooperative claim. Force is explicit and audited.',
-  update_task: 'Update task status, due date or inert metadata using required base_rev.',
+  update_task: 'Update task status, due date or inert metadata. Optional base_rev guards concurrent changes.',
 };
 export interface McpOptions { agent?: string; session?: string; }
 export function createMcpServer(store: Store, options: McpOptions = {}): McpServer {
