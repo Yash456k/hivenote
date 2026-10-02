@@ -10,25 +10,25 @@ import { sandbox, fixture, cliJson, run, cli, actor, closeServer, serverUrl, roo
 async function exercise(args, env) {
   const hive = (...rest) => cliJson([...args, ...rest], { env });
   const name = 'CLI Résumé 日本語';
-  const created = await hive('create', name, '--description', 'A note', '--content', 'alpha unique beta');
+  const created = await hive('add', name, 'A note', 'alpha unique beta');
   assert.equal(created.note.rev, 1);
   assert.equal((await hive('list')).total, 1);
   assert.equal((await hive('read', name)).notes[0].content, 'alpha unique beta');
   assert.equal((await hive('search', 'unique')).total, 1);
-  assert.equal((await hive('edit', name, '--old-str', 'unique', '--new-str', 'edited')).note.content, 'alpha edited beta');
-  assert.equal((await hive('append', name, '--body', 'CLI activity')).note.rev, 2);
-  assert.equal((await hive('replace', name, '--content', 'replacement')).note.rev, 3);
-  assert.equal((await hive('revision', name, '--rev', '1')).note.content, 'alpha unique beta');
-  assert.equal((await hive('history', name)).total, 4);
-  assert.equal((await hive('delete', name)).note.rev, 4);
-  // A deleted note is still found by name to look back at or restore.
-  assert.equal((await hive('history', name)).total, 5);
-  assert.equal((await hive('restore', name, '--rev', '1')).note.rev, 5);
-  await hive('create', 'CLI task', '--kind', 'task');
-  assert.ok((await hive('claim', 'CLI task')).note.claimed_by);
-  assert.equal((await hive('release', 'CLI task')).note.claimed_by, null);
-  assert.equal((await hive('update-task', 'CLI task', '--status', 'done')).note.status, 'done');
-  assert.equal((await hive('changes', '--since', '0', '--limit', '100')).events.length, 10);
+  assert.equal((await hive('edit', name, 'unique', 'edited')).note.content, 'alpha edited beta');
+  assert.equal((await hive('append', name, 'CLI activity')).note.rev, 2);
+  assert.equal((await hive('replace', name, 'replacement')).note.rev, 3);
+  assert.equal((await hive('describe', name, 'A better description')).note.description, 'A better description');
+  assert.equal((await hive('delete', name)).note.rev, 5);
+  // A deleted note is still found by name to look back at or bring back.
+  assert.equal((await hive('history', name)).total, 6);
+  assert.equal((await hive('restore', name, '1')).note.content, 'alpha unique beta');
+  await hive('task', 'CLI task', 'Do the thing');
+  assert.equal((await hive('mark', 'CLI task', 'doing')).note.status, 'doing');
+  const board = await hive('tasks');
+  assert.equal(board.notes[0].status, 'doing');
+  assert.ok(board.notes[0].updated_by, 'the board shows who is on the task');
+  assert.equal((await hive('mark', 'CLI task', 'done')).note.status, 'done');
   return created;
 }
 
@@ -62,7 +62,7 @@ test('real remote CLI subprocesses use authenticated HTTP and never create a loc
   await assert.rejects(access(join(configHome, 'data.db')));
   const missing = await run(process.execPath, [cli, '--url', url, 'list'], { env: { ...env, HIVENOTE_TOKEN: '' } });
   assert.notEqual(missing.code, 0);
-  const forbidden = await run(process.execPath, [cli, '--url', url, 'create', 'not-allowed'], { env: { ...env, HIVENOTE_TOKEN: ro.token } });
+  const forbidden = await run(process.execPath, [cli, '--url', url, 'add', 'not-allowed', 'nope'], { env: { ...env, HIVENOTE_TOKEN: ro.token } });
   assert.notEqual(forbidden.code, 0);
   const conflictingMode = await run(process.execPath, [cli, '--url', url, '--db', join(dir, 'must not exist.sqlite'), 'list'], { env });
   assert.notEqual(conflictingMode.code, 0);

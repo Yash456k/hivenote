@@ -17,7 +17,8 @@
     "docs",
     "skills",
     "ui",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=22.16.0"

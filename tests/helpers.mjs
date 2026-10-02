@@ -37,7 +37,21 @@ process.once('exit', () => {
   for (const dir of leftovers) { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } }
 });
 
-export function run(command, args, { cwd = root, env = {}, timeout = 120_000, input, ...options } = {}) {
+/** Scripts pick a hive with HIVENOTE_DB or HIVENOTE_URL; tests may write those as leading --db X / --url X. */
+function hiveEnv(args, env) {
+  const rest = [...args];
+  const picked = {};
+  while (rest[0] === '--db' || rest[0] === '--url') {
+    picked[rest[0] === '--db' ? 'HIVENOTE_DB' : 'HIVENOTE_URL'] = rest[1];
+    rest.splice(0, 2);
+  }
+  return { args: rest, env: { ...env, ...picked } };
+}
+
+export function run(command, commandArgs, { cwd = root, env: givenEnv = {}, timeout = 120_000, input, ...options } = {}) {
+  const { args, env } = command === process.execPath && commandArgs[0] === cli
+    ? (({ args, env }) => ({ args: [cli, ...args], env }))(hiveEnv(commandArgs.slice(1), givenEnv))
+    : { args: commandArgs, env: givenEnv };
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd, env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'], ...options });
     let stdout = '', stderr = '';

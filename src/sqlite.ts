@@ -23,8 +23,6 @@ const PARAMETERS: Record<Method, readonly string[]> = {
   revision: ['id', 'note', 'rev'],
   restore: ['id', 'note', 'rev', 'op_id'],
   changes: ['since', 'limit', 'tail'],
-  claim: ['id', 'note', 'ttl_seconds', 'force', 'op_id'],
-  release: ['id', 'note', 'force', 'op_id'],
   update_task: ['id', 'note', 'status', 'due_at', 'metadata', 'op_id'],
 };
 
@@ -138,8 +136,6 @@ export class SqliteStore implements Store {
       case 'replace': applyReplace(note, p); break;
       case 'delete': note.deleted_at = now; note.claimed_by = null; note.claim_expires_at = null; break;
       case 'restore': note = this.restored(note, p.rev); break;
-      case 'claim': eventKind = this.applyClaim(note, p, who, now); break;
-      case 'release': eventKind = this.applyRelease(note, p, who); break;
       case 'update_task': applyTaskUpdate(note, p); break;
       default: invalid('Unsupported mutation');
     }
@@ -176,27 +172,7 @@ export class SqliteStore implements Store {
     return { ...old, rev: note.rev, created_at: note.created_at, deleted_at: null, claimed_by: null, claim_expires_at: null };
   }
 
-  private applyClaim(note: Note, p: Params, who: Attribution, now: string): string {
-    if (note.kind !== 'task') invalid('Only tasks may be claimed');
-    if (p.force !== undefined && typeof p.force !== 'boolean') invalid('force must be boolean');
-    const ttl = p.ttl_seconds === undefined ? 900 : integer(p.ttl_seconds, 'ttl_seconds', 1, 86400);
-    const heldByOther = note.claimed_by !== null && note.claim_expires_at !== null && note.claim_expires_at > now;
-    if (heldByOther && p.force !== true) this.conflict(note, 'Task already claimed; force must be explicit');
-    note.claimed_by = who.principal;
-    note.claim_expires_at = new Date(Date.parse(now) + ttl * 1000).toISOString();
-    return p.force ? 'claim_force' : 'claim';
-  }
 
-  private applyRelease(note: Note, p: Params, who: Attribution): string {
-    if (note.kind !== 'task') invalid('Only tasks may be released');
-    if (p.force !== undefined && typeof p.force !== 'boolean') invalid('force must be boolean');
-    if (note.claimed_by !== null && note.claimed_by !== who.principal && p.force !== true) {
-      this.conflict(note, 'Claim belongs to another principal; force must be explicit');
-    }
-    note.claimed_by = null;
-    note.claim_expires_at = null;
-    return p.force ? 'release_force' : 'release';
-  }
 
   /** Append the event for this change and return the receipt. */
   private record(note: Note, kind: string, p: Params, who: Attribution, now: string): Receipt {

@@ -50,19 +50,19 @@ try {
   const version = await checked(bin, ['--version'], { cwd: prefix });
   assert.ok(version.stdout.includes(pkg.version));
   const db = join(prefix, 'installed notes with spaces 日本語.sqlite');
-  const created = JSON.parse((await checked(bin, ['--db', db, 'create', '--params', JSON.stringify(fixture({ name: 'Installed Résumé 日本語', content: 'tarball real content' }))], { cwd: prefix })).stdout);
-  const read = JSON.parse((await checked(bin, ['--db', db, 'read', created.note.name], { cwd: prefix })).stdout);
+  const created = JSON.parse((await checked(bin, ['add', 'Installed Résumé 日本語', 'a note', 'tarball real content'], { cwd: prefix, env: { ...env, HIVENOTE_DB: db } })).stdout);
+  const read = JSON.parse((await checked(bin, ['read', created.note.name], { cwd: prefix, env: { ...env, HIVENOTE_DB: db } })).stdout);
   assert.equal(read.notes[0].content, 'tarball real content');
   await access(db);
   // The installed CLI resolves its own shipped modules and dependencies.
-  mcp = await connectMcp(bin[0], [...bin[1], '--db', join(prefix, 'installed MCP 日本語.sqlite'), 'mcp'], env);
+  mcp = await connectMcp(bin[0], [...bin[1], 'mcp'], { ...env, HIVENOTE_DB: join(prefix, 'installed MCP 日本語.sqlite') });
   await mcpSmoke(mcp.client, 'Installed MCP 日本語');
   await mcp.client.close();
   mcp = null;
   const artifactDirectory = join(root, '.tmp', 'artifacts');
   await mkdir(artifactDirectory, {recursive:true});
   await copyFile(tarball, join(artifactDirectory, packed.filename));
-  console.log(JSON.stringify({ package: pkg.name, version: pkg.version, dry_run_files: dry.files.length, tarball_bytes: packed.size, artifact: `.tmp/artifacts/${packed.filename}`, installed_bin: 'help/version/create/read verified', paths: 'spaces and non-ASCII verified', mcp: 'actual SDK stdio handshake and all fifteen tools verified' }, null, 2));
+  console.log(JSON.stringify({ package: pkg.name, version: pkg.version, dry_run_files: dry.files.length, tarball_bytes: packed.size, artifact: `.tmp/artifacts/${packed.filename}`, installed_bin: 'help/version/add/read verified', paths: 'spaces and non-ASCII verified', mcp: 'actual SDK stdio handshake and every tool verified' }, null, 2));
 } finally {
   await mcp?.client.close();
   await rm(dir, { recursive: true, force: true });

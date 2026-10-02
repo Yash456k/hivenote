@@ -4,9 +4,9 @@ import { readFileSync } from 'node:fs';
 /** The package version, read from package.json so it is defined in one place. */
 export const VERSION = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version;
 
-export const METHODS = ['list','read','search','create','edit','replace','append','delete','history','revision','restore','changes','claim','release','update_task'] as const;
+export const METHODS = ['list','read','search','create','edit','replace','append','delete','history','revision','restore','changes','update_task'] as const;
 export type Method = typeof METHODS[number];
-export const MUTATIONS = new Set<Method>(['create','edit','replace','append','delete','restore','claim','release','update_task']);
+export const MUTATIONS = new Set<Method>(['create','edit','replace','append','delete','restore','update_task']);
 export type Params = Record<string, unknown>;
 export interface Store { call(method: Method, params?: Params): Promise<unknown>; close?(): void; }
 export interface Actor {
@@ -55,8 +55,6 @@ export function clientParams(method: Method, params: Params = {}): Params {
  revision {note|id,rev} => {note:Note}
  restore {note|id,rev,op_id} (deleted ID allowed)
  changes {since?:seq,limit?} | {tail:1-100} => {events:Event[],cursor,has_more}
- claim {note|id,ttl_seconds?:number,force?:boolean,op_id} default 900 seconds
- release {note|id,force?:boolean,op_id}
  update_task {note|id,status?,due_at?:ISO|null,metadata?,op_id}
  Every mutation returns immutable {note:Note,event_seq:number,op_id:string}; append leaves rev unchanged.
  All errors HiveNoteError; conflict 409 details {current:Note}. Metadata/references inert.

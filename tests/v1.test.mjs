@@ -15,11 +15,11 @@ test('local CLI commands print no SQLite experimental warning', async t => {
 
 test('wait wakes when another process marks a task done, and shows its progress', async t => {
   const db = join(await sandbox(t, 'wait'), 'notes.db');
-  await cliJson(['--db', db, 'create', 'build-api', '--kind', 'task', '--description', 'Build the API']);
-  const waiting = run(process.execPath, [cli, '--db', db, 'wait', 'build-api', '--status', 'done', '--interval-ms', '100', '--timeout-seconds', '30']);
+  await cliJson(['--db', db, 'task', 'build-api', 'Build the API']);
+  const waiting = run(process.execPath, [cli, '--db', db, 'wait', 'build-api', 'done']);
   await new Promise(resolve => setTimeout(resolve, 500));
-  await cliJson(['--db', db, 'append', 'build-api', '--body', 'endpoints done']);
-  await cliJson(['--db', db, 'update-task', 'build-api', '--status', 'done']);
+  await cliJson(['--db', db, 'append', 'build-api', 'endpoints done']);
+  await cliJson(['--db', db, 'mark', 'build-api', 'done']);
 
   const result = await waiting;
   assert.equal(result.code, 0, result.stderr);
@@ -42,8 +42,8 @@ test('edits and replacements that change nothing are rejected instead of creatin
 
 test('hivenote ui serves the dashboard; only the page it opened can read, and never write', async t => {
   const db = join(await sandbox(t, 'ui'), 'notes.db');
-  await cliJson(['--db', db, 'create', 'context', '--description', 'Shared context']);
-  const child = spawn(process.execPath, [cli, '--db', db, 'ui', '--no-open', '--port', '0']);
+  await cliJson(['--db', db, 'add', 'context', 'Shared context']);
+  const child = spawn(process.execPath, [cli, 'ui', '0'], { env: { ...process.env, HIVENOTE_DB: db } });
   t.after(() => child.kill());
   const { dashboard } = await new Promise((resolve, reject) => {
     child.stdout.once('data', chunk => resolve(JSON.parse(String(chunk))));
@@ -72,16 +72,16 @@ test('hivenote connect checks the token, then every command uses the remote hive
   const dir = await sandbox(t, 'connect');
   const hive = join(dir, 'hive.db');
   const laptop = { HIVENOTE_HOME: join(dir, 'laptop') };
-  await cliJson(['--db', hive, 'create', 'on-hive', '--description', 'Lives on the hive machine']);
-  const { token } = await cliJson(['--db', hive, 'token', 'create', '--device', 'laptop', '--scope', 'rw']);
-  const server = spawn(process.execPath, [cli, '--db', hive, 'serve', '--port', '0']);
+  await cliJson(['--db', hive, 'add', 'on-hive', 'Lives on the hive machine']);
+  const { token } = await cliJson(['--db', hive, 'token', 'add', 'laptop']);
+  const server = spawn(process.execPath, [cli, 'serve', ':0'], { env: { ...process.env, HIVENOTE_DB: hive } });
   t.after(() => server.kill());
-  const { listening } = await new Promise(resolve => server.stdout.once('data', chunk => resolve(JSON.parse(String(chunk)))));
-  const url = `http://127.0.0.1:${listening.port}`;
+  const { serving } = await new Promise(resolve => server.stdout.once('data', chunk => resolve(JSON.parse(String(chunk)))));
+  const url = `http://127.0.0.1:${new URL(serving).port}`;
 
   const refused = await run(process.execPath, [cli, 'connect', url], { env: laptop, input: 'wrong-token-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n' });
   assert.notEqual(refused.code, 0);
-  assert.equal((await cliJson(['config', 'show'], { env: laptop })).url, undefined, 'nothing saved after a bad token');
+  assert.equal((await cliJson(['status'], { env: laptop })).hive, 'local', 'nothing saved after a bad token');
 
   assert.equal((await cliJson(['connect', url], { env: laptop, input: token + '\n' })).connected, url);
   assert.deepEqual((await cliJson(['list'], { env: laptop })).notes.map(note => note.name), ['on-hive']);
@@ -106,48 +106,46 @@ test('writes are labeled with the agent running the command, innermost agent fir
   assert.equal(detectAgent({ HERMES_SESSION_ID: 'x', CLAUDECODE: '1' }), 'hermes');
   assert.equal(detectAgent({}), undefined);
   const db = join(await sandbox(t, 'label'), 'notes.db');
-  const created = await cliJson(['--db', db, 'create', 'labeled'], { env: { CODEX_CI: '1' } });
+  const created = await cliJson(['--db', db, 'add', 'labeled', 'x'], { env: { CODEX_CI: '1' } });
   assert.equal(created.note.last_attribution.agent, 'codex');
-  const explicit = await cliJson(['--db', db, '--agent', 'me', 'create', 'explicit'], { env: { CODEX_CI: '1' } });
+  const explicit = await cliJson(['--db', db, '--agent', 'me', 'add', 'explicit', 'x'], { env: { CODEX_CI: '1' } });
   assert.equal(explicit.note.last_attribution.agent, 'me');
 });
 
-test('commands take a note by name, update-task needs no revision, retries and kebab-case search work', async t => {
+test('a task goes by name from start to done, and kebab-case names are searchable', async t => {
   const db = join(await sandbox(t, 'names'), 'notes.db');
-  await cliJson(['--db', db, 'create', 'build-api', '--kind', 'task', '--description', 'Build the API']);
-  await cliJson(['--db', db, 'claim', 'build-api']);
-  await cliJson(['--db', db, 'append', 'build-api', '--body', 'Endpoint works']);
-  const done = await cliJson(['--db', db, 'update-task', 'build-api', '--status', 'done', '--op-id', 'finish-1']);
+  await cliJson(['--db', db, 'task', 'build-api', 'Build the API']);
+  await cliJson(['--db', db, 'mark', 'build-api', 'doing']);
+  await cliJson(['--db', db, 'append', 'build-api', 'Endpoint works']);
+  const done = await cliJson(['--db', db, 'mark', 'build-api', 'done']);
   assert.equal(done.note.status, 'done');
-  // Repeating a write with the same --op-id returns the first answer instead of failing.
-  assert.equal((await cliJson(['--db', db, 'update-task', 'build-api', '--status', 'done', '--op-id', 'finish-1'])).note.rev, done.note.rev);
   // Plain words are searched as words, so kebab-case names are found.
   assert.equal((await cliJson(['--db', db, 'search', 'build-api'])).total, 1);
   const read = await cliJson(['--db', db, 'read', 'build-api']);
   assert.equal(read.updates[0].body, 'Endpoint works');
-  const missing = await run(process.execPath, [cli, '--db', db, 'append', 'nope', '--body', 'x']);
+  const missing = await run(process.execPath, [cli, '--db', db, 'append', 'nope', 'x']);
   assert.match(missing.stderr, /No note named 'nope'/u);
 });
 
 test('a worker keeps waiting when the queen restarts mid-wait', async t => {
   const dir = await sandbox(t, 'wait-restart');
   const hive = join(dir, 'hive.db');
-  await cliJson(['--db', hive, 'create', 'ship-it', '--kind', 'task']);
-  const { token } = await cliJson(['--db', hive, 'token', 'create', '--device', 'worker']);
-  const serve = port => spawn(process.execPath, [cli, '--db', hive, 'serve', '--port', String(port)]);
-  const listening = child => new Promise(resolve => child.stdout.once('data', chunk => resolve(JSON.parse(String(chunk)).listening.port)));
+  await cliJson(['--db', hive, 'task', 'ship-it', 'Ship it']);
+  const { token } = await cliJson(['--db', hive, 'token', 'add', 'worker']);
+  const serve = port => spawn(process.execPath, [cli, 'serve', `:${port}`], { env: { ...process.env, HIVENOTE_DB: hive } });
+  const listening = child => new Promise(resolve => child.stdout.once('data', chunk => resolve(Number(new URL(JSON.parse(String(chunk)).serving).port))));
   let queen = serve(0);
   const port = await listening(queen);
   t.after(() => queen.kill());
   const env = { HIVENOTE_TOKEN: token };
-  const waiting = run(process.execPath, [cli, '--url', `http://127.0.0.1:${port}`, 'wait', 'ship-it', '--status', 'done', '--interval-ms', '200', '--timeout-seconds', '30'], { env });
+  const waiting = run(process.execPath, [cli, '--url', `http://127.0.0.1:${port}`, 'wait', 'ship-it', 'done'], { env });
   await new Promise(resolve => setTimeout(resolve, 600));
   queen.kill();
   await new Promise(resolve => queen.once('exit', resolve));
   await new Promise(resolve => setTimeout(resolve, 1500));
   queen = serve(port);
   await listening(queen);
-  await cliJson(['--db', hive, 'update-task', 'ship-it', '--status', 'done']);
+  await cliJson(['--db', hive, 'mark', 'ship-it', 'done']);
   const result = await waiting;
   assert.equal(result.code, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).note.status, 'done');

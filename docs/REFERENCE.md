@@ -1,307 +1,137 @@
 # HiveNote reference
 
-Everything the [README](../README.md) leaves out: every command, the limits, remote
-access, the dashboard, MCP, transports and backups. `hivenote --help` lists the
-commands too. CLI, stdio MCP and authenticated HTTP share one application contract
-and one SQLite database. Nothing ever executes note content or metadata.
+Everything the [README](../README.md) leaves out. `hivenote help` lists the commands too.
 
-## Runtime and installation
-
-Node **22.16 or newer**. HiveNote uses Node's built-in `node:sqlite`, so no native
-addon or SQLite flag is needed. 22.16 is the first release whose built-in SQLite
-includes full-text search (FTS5); older Node prints a clear `unsupported_node`
-error. Node 22 flags `node:sqlite` as experimental; HiveNote silences only that
-warning. CI tests 22.16.0, 22, 24 and 26 on Linux. Windows/macOS-compatible source
-has not been tested on those OSes.
+## Notes
 
 ```sh
-npm install -g hivenote
-hivenote --help
+hivenote list                                   # every note: name and one-line description
+hivenote read deploy-notes api-decisions        # full notes, with their latest 20 progress lines
+hivenote search deploy staging                  # notes containing all of these words
+hivenote add deploy-notes "How we ship" "Run migrations on staging first."
+hivenote edit deploy-notes "staging" "production"
+hivenote append deploy-notes "Shipped 1.4 to staging"
+hivenote replace deploy-notes - < deploy.md     # rewrite the whole note
+hivenote describe deploy-notes "How we ship, and what broke last time"
+hivenote delete deploy-notes
+hivenote history deploy-notes                   # the latest 100 changes, with version numbers
+hivenote restore deploy-notes 3                 # undo: bring back version 3
 ```
 
-From source: `npm ci`, then use `node dist/cli.js` in place of `hivenote` (`npm test` builds first).
+Every note has a **name** (unique among notes that aren't deleted, at most 256 bytes), a one-line **description** (at most 4 KB) and **text** (at most 512 KB). Notes are always named by their name. Inside, each note also has an ID, so a renamed note or a reused name never mixes up two histories; it shows up in JSON but no command asks for it.
 
-## Local use: no daemon
+Any text argument can be `-`, which reads the text from stdin: a file piped in, or a heredoc. Text that is valid UTF-8 is stored exactly as given. A file saved in an older Windows encoding is read as Windows-1252, so letters like é survive.
+
+**Changes and undo.** Every change is kept in the note's history with who made it and when, including deletes, so nothing is ever lost: `restore` brings back any earlier version, and it finds a deleted note by its name. There is no version checking; the latest write wins. `edit` works on the current text and needs its old text to appear exactly once, so an edit based on outdated text is refused instead of landing in the wrong place. `append` adds a progress line without changing the note's text.
+
+**Search.** Plain words find notes containing all of them, so names like `api-decisions` and hosts like `stg.example.com` work as typed. Quotes, parentheses, `*` or `AND`/`OR`/`NOT` switch to SQLite full-text syntax, such as `"exact phrase"` or `deploy*`.
+
+**Size.** One answer is at most 5 MB. `read` names any note that didn't fit in `too_big` (read it on its own), and says when older progress was left out.
+
+## Tasks
 
 ```sh
-hivenote create build-context --description 'Current design decisions' --content-file design.txt
-hivenote list --limit 20
-hivenote read build-context acceptance
-hivenote search 'design AND decisions'
-hivenote edit build-context --old-str 'old wording' --new-str 'new wording'
-hivenote replace build-context --content-file - < replacement.txt
-hivenote append build-context --body-file progress.txt
-hivenote history build-context --limit 20
-hivenote revision build-context --rev 1
-hivenote delete build-context
-hivenote restore build-context --rev 1     # undo: bring back version 1
-hivenote changes --since 0 --limit 100
+hivenote task build-api "POST /bookings with conflict checks"
+hivenote tasks                                  # the board
+hivenote mark build-api doing                   # todo, doing, done or cancelled
+hivenote wait build-api done                    # until it's done
+hivenote wait build-api                         # until it changes at all, including progress
 ```
 
-`list` and `search` return brief entries (id, name, description, kind,
-updated_at, plus status/due/claim for tasks) so an agent can decide what to read.
-`--full` (`detail: "full"` over RPC/MCP) returns every stored field except content.
-Edits and replacements that would change nothing are rejected rather than
-creating empty revisions.
+A task is a note with a status. The board shows each task's status, who changed it last and how long ago, such as `[doing · codex · 2h ago]`. That is the whole coordination model: nothing is locked, and nothing expires. A task that has said `doing` for hours may belong to an agent that stopped; whoever sees it decides what to do.
 
-Commands print JSON for agents, scripts and pipes, with errors as JSON on stderr
-and a nonzero exit. When a person runs a command in a terminal (stdout is a TTY and
-no Claude Code, Codex or Hermes environment and no `--agent` is present), `list`,
-`search`, `read`, `status`, `wait` and the write commands print a readable view
-instead, and errors are one plain line. `--json` always forces JSON; `NO_COLOR`
-turns off bold and dim text. `--help`/`-h`/`help` and `--version`/`-v`/`version`
-need no database, and a mistyped command suggests the closest one.
-`--content`, `--body`, `--old-str`, `--new-str` accept literal strings, including
-empty replacement text. Corresponding `*-file` flags read UTF-8; `-` reads stdin.
-No eval, shell commands or automatic interpretation. `--params '{...}'` exposes
-the same strict method parameter contract for scripts. Every command names notes by
-their name: `read a b` reads several, and the others take one, as in `append a`.
-`history`, `revision` and `restore` also find a deleted note by its name (the most
-recently deleted one, if the name was used more than once). Notes keep an internal
-ID so renames and reused names never mix up their histories; it appears in JSON
-output but no command asks for it.
+`wait` checks every 5 seconds for up to 9 minutes, then exits with an error, which keeps it under the 10-minute limit agents such as Claude Code put on one command. It follows the note it found first, so a different task created later under the same name never counts. If the queen restarts or the network drops while waiting, it keeps checking until its time is up. It only reads, so `hivenote wait build-api done && your-command` is how a script carries on afterwards.
 
-Description and content are required in the store API but may be empty;
-CLI create defaults both to empty. Names must be nonblank, globally unique among
-live notes, case-sensitive and at most 256 UTF-8 bytes. Content is bounded to
-512 KiB, description 4 KiB and metadata 32 KiB/depth 20. IDs are UUIDs generated
-by the common client unless explicitly supplied. Default page size is 50, max
-100; batch reads accept at most 100 selectors. `list`/`search` exclude content.
-`read` additionally returns the latest 20 append events per selected note in
-`updates`, and `updates_has_more`; use history/changes for complete contributions.
+## Labels
 
-Default data paths are outside the installation:
+Every change records who made it. When HiveNote runs inside Claude Code, Codex or Hermes, it labels changes `claude-code`, `codex` or `hermes` on its own, from their environment variables. When several agents share one machine, give each a role with `--agent builder-1`. Labels are self-reported, for telling agents apart, not for security.
 
-- Linux: `$XDG_DATA_HOME/hivenote/data.db` or `~/.local/share/hivenote/data.db`;
-  config under `$XDG_CONFIG_HOME/hivenote` or `~/.config/hivenote`.
-- macOS: `~/Library/Application Support/hivenote`.
-- Windows: data under `%LOCALAPPDATA%\hivenote`, config under `%APPDATA%\hivenote`.
-- `HIVENOTE_HOME` overrides both directories; `--db PATH` selects an explicit database.
+## One queen, many workers
 
-**Keep the database, WAL and SHM on local disk only. Never put them on Dropbox,
-Syncthing, an SMB/NFS/network share or another synchronization service.** The
-program does not reliably detect every filesystem or sync-folder type. Multiple
-processes on the same machine may open the same local file. Other machines connect
-over HTTP to the queen, the one machine that keeps the hive, never to copies of its file.
+One machine is the **queen**: it keeps the hive's database and serves it. Every other machine is a **worker** that connects to it.
 
-## Inert tasks and concurrency
+On the queen:
 
 ```sh
-hivenote create release-check --kind task --description 'Acceptance checklist' --content-file checklist.txt
-hivenote claim release-check --ttl-seconds 900
-hivenote update-task release-check --status doing --due-at 2030-01-02T03:04:05Z
-hivenote release release-check
+hivenote token add laptop                       # read/write; prints the token once
+hivenote token add dashboard read-only          # for a browser that only watches
+hivenote token list
+hivenote token remove laptop                    # that machine is shut out at its next request
+hivenote serve 0.0.0.0                          # or serve 0.0.0.0:8080, or serve :7391
 ```
 
-To hand work between agents, one agent waits while another finishes:
+`serve` listens on 127.0.0.1:7391 unless told otherwise. The database stores only a hash of each token.
+
+On a worker:
 
 ```sh
-hivenote wait release-check --status done   # blocks until the task is done
-hivenote wait build-context                 # blocks until any change or append
+hivenote connect                                # asks for the URL and the token (typed hidden)
+echo "$TOKEN" | hivenote connect https://queen.example.com
+hivenote status                                 # which hive, and whether it answers
+hivenote disconnect                             # back to this machine's own hive
 ```
 
-`wait` prints the note and its latest appended progress when the condition is met,
-and exits nonzero on timeout (default 540 seconds; `--timeout-seconds 0` waits
-forever) or if the note is deleted. It checks with `read` every 5 seconds
-(`--interval-seconds 60` for long work), so it works the same against a local database or a remote server
-and needs only a read-only token. It never starts agents or runs commands: a user
-script can do that, e.g. `hivenote wait X --status done && your-command`.
+`connect` checks the URL and token before saving them, keeps the token in a private file (mode 600) in HiveNote's settings folder, and from then on every command on that machine, including agents', uses the queen. If the queen can't be reached, commands fail; they never quietly fall back to a local hive. `status` says which of these is wrong: the queen is down, the address isn't a queen, or the token was rejected.
 
-Statuses: `todo`, `doing`, `done`, `cancelled`; `--due-at null` clears a due date.
-Claims are atomic cooperative leases, not scheduling or authorization. Expiry is
-checked against the queen's clock (this machine's, for a local hive) when claiming; nothing wakes or runs later.
-Claim owner comes from the token principal, not a body field. `--force` on claim
-or release explicitly overrides another owner and is recorded; any rw client may
-use it. Local direct users trust the filesystem and share principal `local`;
-agent labels do **not** create isolated owners or permissions.
-
-Every change is recorded in the note's history with who made it, and `restore`
-brings back any earlier version (deleted notes too), so nothing is ever lost.
-There is no version checking: the latest write wins. `edit` works on the current
-text and needs its old text to match exactly once, so an edit based on outdated
-text is refused (409 with the current note) rather than applied in the wrong place. Appends record distinct
-contributions without changing content or rev. All successful writes return an
-immutable receipt and event sequence. Reuse a stable `--op-id` when retrying a
-failed transport; changed method/payload/principal with that ID is a conflict.
-Do not reuse an operation ID for a new intent.
-
-## The queen and worker machines
-
-One machine is the **queen**: it keeps the hive's database and serves it. Every
-other machine is a **worker** that connects to it. On the queen:
-
-```sh
-hivenote --db /path/on/local/disk/notes.db token create --device laptop --scope rw
-hivenote --db /path/on/local/disk/notes.db token create --device observer --scope ro
-hivenote --db /path/on/local/disk/notes.db token list
-hivenote --db /path/on/local/disk/notes.db serve --port 7391
-```
-
-Each create prints a new high-entropy token **once**, in a JSON `token` field.
-Store it privately (mode 0600 on POSIX); the database keeps only its SHA-256 hash.
-Avoid shared logs or shell-history secrets. A client may use `HIVENOTE_TOKEN` or a
-private file; a configured token file takes precedence over the environment.
-Tokens/admin/backup/config are local-only, never RPC/MCP methods. Revoke locally
-with `hivenote --db PATH token revoke DEVICE` (every active token for that device name); revocation also denies receipt
-replays. `ro` can read all notes/history, `rw` can mutate all notes; there are no
-per-note ACLs or separate force-operation roles.
-
-On each worker machine, connect once. It asks for the URL and the token (typed
-hidden), checks they work, and keeps the token privately in HiveNote's config
-folder. Every command, including agents', then uses that hive:
-
-```sh
-hivenote connect              # Hive URL: http://100.64.0.5:7391   Token: ••••
-echo "$TOKEN" | hivenote connect https://notes.example.com   # scripted
-hivenote disconnect           # back to the local database
-hivenote status               # which hive this machine uses, and whether it answers
-```
-
-`status` prints `{"hive":"queen", "reachable":true, "token":"accepted", "notes", "queen_version",
-"this_version", "round_trip_ms"}` on a worker, or `{"hive":"local", "db", "notes", "version"}`
-when the hive is on this machine. If the queen can't be reached or rejects the token, it
-says which on stderr and exits nonzero.
-
-Any reachable address works: LAN, Tailscale, a public IP or a tunnel. Over the
-open internet use `https://` (for example a Cloudflare tunnel), because plain
-HTTP sends the token unencrypted.
-
-Lower-level equivalents:
-
-```sh
-hivenote --url https://notes.example.com --token-file /private/token.txt list
-hivenote config set --url https://notes.example.com --token-file /private/token.txt
-hivenote read build-context
-hivenote config show
-hivenote config reset
-hivenote config set --db /path/on/local/disk/notes.db
-```
-
-URL must be an HTTP(S) origin without credentials, path, query or fragment.
-Invalid config and remote failure fail closed: **no silent local fallback**.
-Flags win over saved config for that one command: `--db` on a connected machine
-runs locally, `--url` on a local one runs remotely. Only `--db` and `--url`
-together are an error. Config stores paths/labels, never a raw token.
-HTTP calls default to a 10-second attempt timeout and at most two retries for
-transport failures/503; retries reuse the exact operation ID and request.
-One request per tool call except those bounded retries; batch read is one call.
-Remote paths never load SQLite, and normal CLI paths never load the MCP SDK.
-
-Transport: server defaults to **127.0.0.1:7391**. `GET /health` returns `{ok, version}`;
-`POST /v1/call` accepts `{method,params,agent?,session?}` with Bearer auth. Request
-limit is 1 MiB, methods/fields are allowlisted, errors sanitized, no permissive
-CORS. `agent`/`session` are unverified labels (`labels_verified:false`);
-`verified:true` applies only to token principal/device. Local attribution is
-`verified:false`. When `--agent` is not given, the CLI labels writes with the agent
-it runs under (Claude Code, Codex or Hermes, from their environment variables).
-Every reply carries an `x-hivenote-version` header, and a client prints one warning
-on stderr when the hive's major or minor version differs from its own.
-
-## Dashboard
-
-```sh
-hivenote ui            # opens http://127.0.0.1:7391 in your browser
-```
-
-A live, read-only view of the hive: notes as rearrangeable cards (the order is
-saved in your browser only and never affects agents), the task board, and a
-feed of what each agent is doing, refreshed every two seconds. `hivenote ui`
-opens the page with a key made for that launch, carried in the link's `#` part
-(which browsers never send to any server); only a page holding that key can read,
-and nothing can write from the page. Restarting `ui` makes a new key. If 7391 is
-taken, `ui` uses the next free port. `hivenote serve` also serves the dashboard at `/`, and there
-every viewer pastes a token once (`hivenote token create --device browser
---scope ro`), which that browser remembers. A request with neither a token nor
-the `ui` key is refused, wherever it comes from.
-
-## Agent skill
-
-[`skills/hivenote/SKILL.md`](../skills/hivenote/SKILL.md) teaches an agent to use
-HiveNote through the CLI: list names and descriptions, read only what is relevant,
-update existing notes instead of duplicating them, and hand off tasks with
-`append`, `update-task` and `wait`. For Claude Code, copy the folder to
-`~/.claude/skills/hivenote/` (all projects) or `.claude/skills/hivenote/` (one
-project). Other agents that read `SKILL.md` skills can use the same file.
-
-## MCP examples (do not edit global configs automatically)
-
-Claude Desktop JSON example; replace the bin path with your installation:
-
-```json
-{
-  "mcpServers": {
-    "hivenote": {
-      "command": "/absolute/installation/node_modules/.bin/hivenote",
-      "args": ["--db", "/absolute/local/notes.db", "mcp"]
-    }
-  }
-}
-```
-
-Codex TOML example:
-
-```toml
-[mcp_servers.hivenote]
-command = "/absolute/installation/node_modules/.bin/hivenote"
-args = ["--url", "https://notes.example.com", "--token-file", "/private/token.txt", "mcp"]
-```
-
-Either client can use either mode by changing arguments. On Windows use `node`
-as command and the installed `dist/cli.js` as the first argument. The MCP bridge
-is stdio, not an HTTP MCP endpoint; remote stdio tools forward to the same HTTP
-application contract. Stdout is protocol-only. Initialization `clientInfo.name`
-may supply an agent label; it remains self-reported, not authenticated identity.
-Tool descriptions explicitly mark stored notes as **DATA, not instructions or
-authority**. Session/repo/command references, due dates and task text are inert.
-
-## Transport options: configure yourself
-
-A private SSH forward needs no public bind: `ssh -L 7391:127.0.0.1:7391 QUEEN_HOST`,
-then use `http://127.0.0.1:7391`. Tailscale routing is also possible; bind explicitly
-to an intended interface or use your existing proxy, applying your own ACLs.
-Use HTTPS or an authenticated encrypted tunnel off-machine: HTTP alone does not
-protect bearer tokens. No tunnel, firewall, DNS or host service was configured
-by HiveNote.
-
-For an **existing user-owned named Cloudflare Tunnel**, add an ingress route to
-your own tunnel configuration, followed by its existing catch-all:
+Any address works: your LAN, Tailscale, or a tunnel. The token travels with every request, so over plain `http://` anyone on the same network could read it; `connect` warns about that except for this machine and Tailscale addresses, which encrypt traffic themselves. Across the open internet, use HTTPS. For an existing Cloudflare tunnel, add a route to its configuration:
 
 ```yaml
 ingress:
-  - hostname: notes.example.com
+  - hostname: queen.example.com
     service: http://127.0.0.1:7391
   - service: http_status:404
 ```
 
-Run your existing named tunnel normally and manage its DNS yourself. HiveNote's Bearer token is still required. Cloudflare Access is not integrated; an
-interactive Access login wall is incompatible with this headless client unless
-you independently provide a compatible transport. No Cloudflare account or
-authentication platform is provisioned here.
+With Tailscale, `tailscale serve --bg --https=8444 http://127.0.0.1:7391` gives the queen a private HTTPS address on your tailnet. An SSH forward works too: `ssh -L 7391:127.0.0.1:7391 QUEEN_HOST`, then connect to `http://127.0.0.1:7391`.
 
-## Backups and limits
+**Versions.** The queen and its workers should run the same version. Every answer carries the queen's version, and a worker prints one warning when the two differ in their first two numbers. Update the queen first.
 
-`hivenote --db PATH backup /new/private/backup.db` makes a consistent `VACUUM INTO`
-snapshot and checks SQLite integrity; existing destinations are refused. POSIX
-DB/backup/config permissions are restrictive. Windows requires the user's own
-ACLs. Backups include note history, immutable receipts and token hashes: treat
-them as sensitive. To restore, stop everything using the queen's database, select
-the backup as the replacement local database, verify reads, and reconnect the
-workers to that one queen. Do not copy a live main DB without its WAL or run the
-restored and original databases side by side as two queens.
+## Dashboard
 
-Offline remote operations fail; there is no queue or sync conflict resolution.
-SQLite synchronous work blocks the queen's Node process briefly; this is a
-small tool, not a high-throughput multi-tenant service. History/receipts
-are retained indefinitely. Offset pagination is accurate per request but can
-shift across concurrent requests; use the monotonic changes cursor for a complete
-feed. See [architecture](ARCHITECTURE.md) and [real verification](VERIFICATION.md).
+`hivenote ui` opens a live view of this machine's hive: notes as cards you can drag around (the order is saved in your browser only), the task board, and a feed of what each agent did, refreshed every two seconds. It opens the page with a key made for that launch, carried in the link's `#` part, which browsers never send to any server; only a page holding that key can read, and nothing can write from the page. Starting `ui` again makes a new key. If port 7391 is taken, it uses the next free one.
 
-Tests cover the main behavior, the things users would notice if they broke:
-saving and reading notes, search, edits and conflicts, tasks and handoffs, and
-remote access. They are not meant to cover every small detail. A feature gets a
-test when it lands, and a real bug gets a test when it's fixed.
+The queen's `serve` also serves the dashboard at `/`. There, each browser pastes a token once (a read-only one is enough) and remembers it. A request with neither a token nor the `ui` key is refused, wherever it comes from.
 
-Development: `npm ci`, `npm run typecheck`, `npm test`, `npm run bench`,
-`node scripts/pack-smoke.mjs`. The smoke test installs a tarball into a disposable
-prefix and runs the actual installed CLI and MCP SDK exchange. CI runs all of
-this on every push.
+## Scripts and environment
+
+Agents and scripts always get JSON: results on stdout, and errors on stderr as `{"error":{"code","message","status"}}` with a nonzero exit. A person typing in a terminal gets a readable view instead; `--json` forces JSON there too, and `NO_COLOR` turns off bold and dim text.
+
+| Variable | What it does |
+|---|---|
+| `HIVENOTE_HOME` | One folder for both the settings and the database |
+| `HIVENOTE_DB` | Use this database file for this command |
+| `HIVENOTE_URL` + `HIVENOTE_TOKEN` | Use this queen for this command, without `connect` |
+
+Without them, the database lives at `~/.local/share/hivenote/data.db` on Linux, `~/Library/Application Support/hivenote` on macOS and `%LOCALAPPDATA%\hivenote` on Windows; settings live in `~/.config/hivenote`, the same macOS folder, and `%APPDATA%\hivenote`.
+
+**Keep the database on a local disk.** Never put it in Dropbox, Syncthing or a network share. Several processes on one machine can use it at once; other machines go through the queen. While one process writes, others wait: a command waits up to 5 seconds, and the queen waits 0.2 seconds and answers "busy", which workers retry for up to 5 seconds on their own.
+
+## Backups
+
+```sh
+hivenote backup ~/hivenote-2026-10-03.db
+```
+
+`backup` makes a consistent copy while the hive is in use, checks it, and refuses to overwrite an existing file. Backups contain the full history and the token hashes, so keep them private. To restore, stop the queen, put the backup in place of `data.db` (or point `HIVENOTE_DB` at it), and start it again.
+
+A newer HiveNote opens a database made by an older one. An older HiveNote refuses to open a database made by a newer one and leaves the file untouched.
+
+## MCP
+
+`hivenote mcp` runs HiveNote as a stdio MCP server, against this machine's hive or the queen this machine is connected to. Its tools mirror the commands, and every tool that takes a note takes its name (`note`). Example for Claude Desktop:
+
+```json
+{ "mcpServers": { "hivenote": { "command": "hivenote", "args": ["mcp"] } } }
+```
+
+And for Codex:
+
+```toml
+[mcp_servers.hivenote]
+command = "hivenote"
+args = ["mcp"]
+```
+
+## HTTP
+
+The queen answers `POST /v1/call` with a JSON body `{"method", "params"}` and an `Authorization: Bearer TOKEN` header, and `GET /health` with `{"ok", "version", "queen"}`. Methods: `list`, `read`, `search`, `create`, `edit`, `replace`, `append`, `delete`, `history`, `revision`, `restore`, `changes`, `update_task`. Notes are named with `note` (their name); each write takes an `op_id`, and resending the same `op_id` returns the first answer instead of applying the change twice. Requests are limited to 1 MB.

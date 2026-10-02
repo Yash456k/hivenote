@@ -46,14 +46,18 @@ export interface BriefNote {
   updated_at: string;
   status?: NonNullable<Note['status']>;
   due_at?: string;
-  claimed_by?: string;
+  /** For tasks: the agent (or device) behind the latest change, the "who's on it" sticker. */
+  updated_by?: string;
 }
 
 export function brief(note: Note): BriefNote {
   const entry: BriefNote = { id: note.id, name: note.name, description: note.description, kind: note.kind, updated_at: note.updated_at };
   if (note.status !== null) entry.status = note.status;
   if (note.due_at !== null) entry.due_at = note.due_at;
-  if (note.claimed_by !== null) entry.claimed_by = note.claimed_by;
+  if (note.kind === 'task') {
+    const by = note.last_attribution?.agent ?? note.last_attribution?.device;
+    if (by) entry.updated_by = by;
+  }
   return entry;
 }
 

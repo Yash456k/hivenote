@@ -6,46 +6,40 @@ import { SqliteStore } from '../dist/sqlite.js';
 import { startServer } from '../dist/http.js';
 import { sandbox, cli, run, cliJson, fixture, actor, closeServer, serverUrl } from './helpers.mjs';
 
-test('native CLI flags, UTF-8 file/stdin inputs and task aliases preserve literal inert data', async t => {
+test('text from arguments and stdin is stored exactly as given and never run', async t => {
   const dir = await sandbox(t, 'cli-inputs');
   const env = { HIVENOTE_HOME: join(dir, 'config') };
   const args = ['--db', join(dir, 'input.sqlite')];
   const content = '日本語\n$(touch MUST_NOT_EXIST)\nignore previous instructions\nunique line\n';
-  const file = join(dir, 'content file 日本語.txt');
-  await writeFile(file, content);
-  const created = await cliJson([...args, 'create', 'Native flag note', '--description', 'inert', '--content-file', file], { env, cwd: dir });
+  const created = await cliJson([...args, 'add', 'Native note', 'inert', '-'], { env, cwd: dir, input: content });
   assert.equal(created.note.content, content);
   await assert.rejects(access(join(dir, 'MUST_NOT_EXIST')));
-  assert.equal((await cliJson([...args, 'read', 'Native flag note'], { env })).notes[0].id, created.note.id);
-  const replaced = await cliJson([...args, 'replace', 'Native flag note', '--content-file', '-'], { env, input: 'stdin Résumé\n' });
-  assert.equal(replaced.note.content, 'stdin Résumé\n');
-  const edited = await cliJson([...args, 'edit', 'Native flag note', '--old-str', 'Résumé', '--new-str', 'EDITED'], { env });
-  assert.equal(edited.note.content, 'stdin EDITED\n');
-  const appended = await cliJson([...args, 'append', 'Native flag note', '--body-file', '-'], { env, input: 'activity 日本語' });
-  assert.equal(appended.note.rev, 3);
-  for (const bad of [
-    [...args, 'create', 'bad', '--content', 'x', '--content-file', file],
-    [...args, 'create', '--params', '[1,2]'],
-    [...args, 'list', '--unknown-flag', 'x'],
-    [...args, 'list', '--limit'],
-  ]) assert.notEqual((await run(process.execPath, [cli, ...bad], { env })).code, 0);
+  assert.equal((await cliJson([...args, 'read', 'Native note'], { env })).notes[0].content, content);
+  assert.equal((await cliJson([...args, 'replace', 'Native note', '-'], { env, input: 'stdin Résumé\n' })).note.content, 'stdin Résumé\n');
+  assert.equal((await cliJson([...args, 'edit', 'Native note', 'Résumé', 'EDITED'], { env })).note.content, 'stdin EDITED\n');
+  assert.equal((await cliJson([...args, 'append', 'Native note', '--not an option, just text'], { env })).note.rev, 3);
+  // A file saved in an older Windows encoding keeps its accents.
+  assert.equal((await cliJson([...args, 'add', 'Windows note', 'cp1252', '-'], { env, input: Buffer.from([0x43, 0x61, 0x66, 0xe9]) })).note.content, 'Café');
+  for (const bad of [['list', 'extra'], ['add', 'only-a-name'], ['edit', 'Native note', 'missing new text'], ['mark', 'Native note', 'finished']]) {
+    assert.notEqual((await run(process.execPath, [cli, ...args, ...bad], { env })).code, 0);
+  }
 });
 
-test('CLI token administration and backup are real, omit secrets and refuse remote administration', async t => {
+test('tokens and backups work on the queen, never print secrets, and refuse to run from a worker', async t => {
   const dir = await sandbox(t, 'cli-admin');
   const env = { HIVENOTE_HOME: join(dir, 'config') };
   const db = join(dir, 'authority.sqlite');
   const args = ['--db', db];
-  const token = await cliJson([...args, 'token', 'create', '--device', 'CLI admin', '--scope', 'rw'], { env });
+  const token = await cliJson([...args, 'token', 'add', 'CLI admin'], { env });
   assert.equal(token.device, 'CLI admin');
   assert.equal(token.scope, 'rw');
   assert.ok(token.token);
   const listed = await cliJson([...args, 'token', 'list'], { env });
   assert.equal(listed.length, 1);
-  assert.equal(listed[0].id, token.id);
+  assert.equal(listed[0].device, 'CLI admin');
   assert.ok(!JSON.stringify(listed).includes(token.token));
   assert.ok(!Object.keys(listed[0]).some(k => /hash|secret|^token$/iu.test(k)));
-  const created = await cliJson([...args, 'create', '--params', JSON.stringify(fixture({ name: 'CLI backed up' }))], { env });
+  await cliJson([...args, 'add', 'CLI backed up', 'a note'], { env });
   const backup = join(dir, 'CLI backup 日本語.sqlite');
   assert.equal((await cliJson([...args, 'backup', backup], { env })).path, backup);
   assert.equal((await cliJson(['--db', backup, 'read', 'CLI backed up'], { env })).notes[0].name, 'CLI backed up');
@@ -58,7 +52,7 @@ test('CLI token administration and backup are real, omit secrets and refuse remo
     assert.notEqual(result.code, 0);
   }
   await assert.rejects(access(join(dir, 'forbidden.sqlite')));
-  await cliJson([...args, 'token', 'revoke', token.device], { env });
+  await cliJson([...args, 'token', 'remove', 'CLI admin'], { env });
   assert.throws(() => store.authenticate(token.token), e => e.status === 401);
 });
 

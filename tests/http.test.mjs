@@ -52,7 +52,7 @@ test('HTTP requires valid bearer auth, enforces ro/rw and immediately honors rev
   assert.equal((await reader.call('read', { ids: [created.note.id] })).notes[0].id, created.note.id);
   await assert.rejects(reader.call('create', createParams), e => e.status === 403);
   await assert.rejects(reader.call('append', { id: created.note.id, body: 'not allowed' }), e => e.status === 403);
-  for (const method of ['edit', 'replace', 'delete', 'restore', 'claim', 'release', 'update_task']) {
+  for (const method of ['edit', 'replace', 'delete', 'restore', 'update_task']) {
     await assert.rejects(reader.call(method, { id: created.note.id }), e => e.status === 403, `ro ${method}`);
   }
   const listed = store.tokenList();
@@ -85,21 +85,6 @@ test('response lost after commit: retry returns original receipt, one event, act
   const other = store.tokenCreate('other-device', 'rw');
   await assert.rejects(new HttpStore(url, other.token).call('create', request), e => e.status === 409);
   assert.equal((await store.call('history', { id: created.note.id })).total, 2);
-});
-
-test('20 simultaneous HTTP claim requests have one owner and nineteen conflicts', async t => {
-  const { store, client, url } = await setup(t);
-  const { note } = await client.call('create', fixture({ kind: 'task' }));
-  const contenders = Array.from({ length: 20 }, (_, i) => store.tokenCreate(`claim-${i}`, 'rw'));
-  const results = await Promise.allSettled(contenders.map(token => new HttpStore(url, token.token).call('claim', { id: note.id, ttl_seconds: 60 })));
-  const won = results.filter(r => r.status === 'fulfilled');
-  const lost = results.filter(r => r.status === 'rejected');
-  assert.equal(won.length, 1);
-  assert.equal(lost.length, 19);
-  assert.ok(lost.every(r => r.reason.status === 409));
-  const current = (await client.call('read', { ids: [note.id] })).notes[0];
-  assert.equal(current.claimed_by, won[0].value.note.claimed_by);
-  assert.equal((await client.call('history', { id: note.id })).total, 2);
 });
 
 test('a client warns once when the hive runs a different release', async t => {

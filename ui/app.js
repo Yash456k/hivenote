@@ -310,10 +310,10 @@ addEventListener('pointerup', event => {
 
 function taskCard(task) {
   const meta = [
-    task.claimed_by && el('span', { text: 'claimed' }),
     task.due_at && el('span', { text: `due ${new Date(task.due_at).toLocaleDateString()}` }),
     task.status === 'cancelled' && el('span', { text: 'cancelled' }),
-    el('span', { text: ago(task.updated_at) }),
+    // The sticker: who changed this task last, and how long ago.
+    el('span', { text: task.updated_by ? `${task.updated_by} · ${ago(task.updated_at)}` : ago(task.updated_at) }),
   ];
   return el('button', { class: `card${task.status === 'cancelled' ? ' cancelled' : ''}`, 'data-id': task.id, onclick: () => openNote(task.id) },
     task.status === 'doing' && el('span', { class: 'worker' }, bee()),

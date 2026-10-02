@@ -18,7 +18,7 @@ Each agent session starts without knowing what the last one figured out. HiveNot
 
 Agents use it through the `hivenote` command and a short [skill file](skills/hivenote/SKILL.md) that teaches them when to read and save. On one machine there's nothing to run: the hive is a single SQLite file on your disk. To share it between machines, run `hivenote serve` on one and `hivenote connect` on the others, and every agent on all of them works from the same notes.
 
-Notes can also be tasks. An agent claims a task so nobody else picks it up, appends progress as it goes, and marks it done, while another agent sits in `hivenote wait build-api --status done` and carries on the moment it finishes. Every change is kept in the note's history, so any of them can be undone with `hivenote restore`.
+Notes can also be tasks. An agent marks a task `doing`, which shows everyone who is on it and since when, appends progress as it goes, and marks it `done`, while another agent sits in `hivenote wait build-api done` and carries on the moment it finishes. Every change is kept in the note's history, so any of them can be undone with `hivenote restore`.
 
 `hivenote ui` opens the dashboard above, with notes as cards you can drag around, the task board, and a feed of which agent did what, refreshed every two seconds.
 
@@ -26,15 +26,15 @@ Notes can also be tasks. An agent claims a task so nobody else picks it up, appe
 |---|---|
 | `hivenote list` | Every note's name and description |
 | `hivenote read deploy api-decisions` | The full notes, with their latest progress |
-| `hivenote search 'deploy AND staging'` | Full-text search across all notes |
-| `hivenote create NAME --description '…' --content '…'` | A new note (add `--kind task` for a task) |
-| `hivenote edit NAME --old-str '…' --new-str '…'` | Change one passage |
-| `hivenote append NAME --body '…'` | Add progress without rewriting the note |
-| `hivenote claim NAME` | Take a task |
-| `hivenote update-task NAME --status done` | Move a task along the board |
-| `hivenote wait NAME --status done` | Block until another agent finishes it |
+| `hivenote search deploy staging` | Full-text search across all notes |
+| `hivenote add NAME "description" "text"` | A new note |
+| `hivenote edit NAME "old text" "new text"` | Change one passage |
+| `hivenote append NAME "progress"` | Add progress without rewriting the note |
+| `hivenote task NAME "description"` | A new task |
+| `hivenote mark NAME doing` | Move a task along the board (`todo`, `doing`, `done`, `cancelled`) |
+| `hivenote wait NAME done` | Block until another agent finishes it |
 
-Notes are always named by their name. Agents get JSON; when you type a command yourself, you get a readable view (`--json` for JSON anyway). `hivenote --help` lists the rest (history, restore, delete, backups), and the [reference](docs/REFERENCE.md) covers all of it in detail.
+Agents get JSON; when you type a command yourself, you get a readable view. `hivenote help` lists the rest (replace, delete, history, restore, backups), and the [reference](docs/REFERENCE.md) covers all of it.
 
 ## Run it yourself
 
@@ -61,8 +61,8 @@ mkdir -p ~/.codex/skills && cp -r "$(npm root -g)/hivenote/skills/hivenote" ~/.c
 Pick one machine to be the queen: it keeps the hive and serves it to the others. On the queen:
 
 ```sh
-hivenote token create --device laptop   # one token per worker machine, printed once
-hivenote serve --host 0.0.0.0           # listens on port 7391 and serves the dashboard too
+hivenote token add laptop               # one token per worker machine, printed once
+hivenote serve 0.0.0.0                  # listens on port 7391 and serves the dashboard too
 ```
 
 On each worker machine:
@@ -73,6 +73,10 @@ hivenote status                         # checks the queen answers and the token
 ```
 
 Any address works: your LAN, Tailscale, or a tunnel. Across the open internet, put it behind HTTPS (a Cloudflare tunnel works), because plain HTTP sends the token unencrypted.
+
+### Updating
+
+Run `npm install -g hivenote@latest` on every machine, the queen first. Your notes, tokens and connections stay as they are. Copy the skill again afterwards, so agents learn any new commands.
 
 ## License
 
