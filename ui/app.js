@@ -95,6 +95,10 @@ function bee(className = '') {
         <path d="M40.6 40.8 q2.3 2.2 4.6 0" fill="none" class="line" stroke-width="1.9" stroke-linecap="round"/>
         <ellipse cx="36.8" cy="40.4" rx="2.2" ry="1.5" fill="#ff8fa3" opacity="0.7"/>
         <ellipse cx="48.2" cy="40.4" rx="1.8" ry="1.4" fill="#ff8fa3" opacity="0.7"/>
+        <g class="crown" transform="rotate(17 41 22)">
+          <path d="M35 24.6 L34.4 16.8 L38.3 20.2 L41 15 L43.7 20.2 L47.6 16.8 L47 24.6 Z" stroke-width="1.8" stroke-linejoin="round"/>
+          <circle cx="41" cy="21.9" r="1.15" fill="#ff8fa3"/>
+        </g>
       </g>
     </svg>`;
   return template.content.firstElementChild;
@@ -515,6 +519,12 @@ function showConnect(reason) {
 $('where').textContent = location.host;
 $('brand-bee').append(bee());
 $('connect-bee').append(bee());
+// The machine that serves the hive to the others is the queen, so its bees wear a crown.
+fetch('/health').then(response => response.json()).then(health => {
+  if (!health.queen) return;
+  document.body.classList.add('queen');
+  $('where').textContent = `Queen bee · ${location.host}`;
+}).catch(() => {});
 $('reader-close').addEventListener('click', () => $('reader').close());
 $('reader').addEventListener('click', event => { if (event.target === $('reader')) $('reader').close(); });
 $('connect-form').addEventListener('submit', event => {

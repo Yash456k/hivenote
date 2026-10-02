@@ -342,6 +342,9 @@ code {
 .bee .body-fill { fill: #ffcd3c; }
 .bee .ink { fill: #3a2a10; }
 .bee .line { stroke: #3a2a10; }
+.bee .crown { display: none; }
+.bee .crown path { fill: #ffb400; stroke: #3a2a10; }
+.queen :is(.brand-bee, .connect-bee) .bee .crown { display: inline; }
 .bee .wing { fill: var(--wing); stroke: var(--wing-edge); stroke-width: 1.5; transform-box: fill-box; transform-origin: 50% 100%; animation: flap 0.14s ease-in-out infinite alternate; }
 .bee .wing.back { animation-delay: -0.07s; }
 .bee .whole { animation: bob 1.8s ease-in-out infinite; }

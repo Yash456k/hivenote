@@ -92,7 +92,7 @@ export async function startServer(store: ServerStore, options: ServerOptions = {
   const ui = loadUi();
   const server = http.createServer({ requestTimeout: 15000, headersTimeout: 10000, keepAliveTimeout: 5000, maxHeaderSize: 16384 }, (request, response) => {
     void (async () => {
-      if (request.method === 'GET' && request.url === '/health') { reply(response, 200, { ok: true, version: VERSION }); return; }
+      if (request.method === 'GET' && request.url === '/health') { reply(response, 200, { ok: true, version: VERSION, queen: options.localViewer !== true }); return; }
       const page = request.method === 'GET' || request.method === 'HEAD' ? ui.get((request.url ?? '').split('?')[0]!) : undefined;
       if (page) {
         response.writeHead(200, { 'content-type': page.type, 'cache-control': 'no-cache', 'content-security-policy': UI_POLICY, 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' });
