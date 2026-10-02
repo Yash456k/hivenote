@@ -32,7 +32,13 @@
       <section class="notes" aria-labelledby="notes-title">
         <div class="section-head">
           <h2 id="notes-title">Notes</h2>
-          <span class="hint-text">Drag to arrange. Only your view changes.</span>
+          <div class="section-tools">
+            <span class="hint-text">Drag to arrange. Only your view changes.</span>
+            <div class="view-switch" role="group" aria-label="How notes are shown">
+              <button type="button" data-view="cards" aria-pressed="true"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="1.5" width="5.5" height="7" rx="1.6"/><rect x="9" y="1.5" width="5.5" height="4.5" rx="1.6"/><rect x="1.5" y="10.5" width="5.5" height="4" rx="1.6"/><rect x="9" y="8" width="5.5" height="6.5" rx="1.6"/></svg>Cards</button>
+              <button type="button" data-view="honeycomb" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 1.2 8.2 3v3.6L5 8.4 1.8 6.6V3Z"/><path d="M11.2 1.2 14.4 3v3.6l-3.2 1.8L8 6.6V3Z"/><path d="M8.1 7.6l3.2 1.8V13l-3.2 1.8L4.9 13V9.4Z"/></svg>Honeycomb</button>
+            </div>
+          </div>
         </div>
         <div class="masonry" id="notes"></div>
       </section>

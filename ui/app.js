@@ -9,6 +9,11 @@ const GAP = 16;
 const MIN_CARD = 250;
 const TOKEN_KEY = 'hivenote-token';
 const ORDER_KEY = `hivenote-order:${location.host}`;
+const VIEW_KEY = `hivenote-view:${location.host}`;
+/** Honeycomb cells: a pointy-top hexagon, its width and height in proportion. */
+const HEX_W = 178;
+const HEX_H = Math.round(HEX_W * 2 / Math.sqrt(3));
+const HEX_GAP = 8;
 
 const $ = id => document.getElementById(id);
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -197,7 +202,7 @@ function fillCard(card, note) {
     el('strong', { text: note.name }),
     note.description && el('p', { class: 'description', text: note.description }),
     content && el('div', { class: 'content', text: content.slice(0, 1200) }),
-    el('div', { class: 'footer' }, who && avatar(who), el('span', { text: who ? `${who} · ${ago(note.updated_at)}` : ago(note.updated_at) })),
+    el('div', { class: 'footer' }, who && avatar(who), who && el('span', { text: who }), el('span', { class: 'when', text: who ? `· ${ago(note.updated_at)}` : ago(note.updated_at) })),
   );
 }
 
@@ -238,23 +243,93 @@ function renderNotes() {
   }));
 }
 
-/** Place each card in the shortest column. Moving cards glide there via CSS transitions. */
-function layout() {
+/**
+ * Place every card: in the shortest column (cards), or cell by cell in an offset honeycomb.
+ * Moving cards glide there via CSS transitions. `heights` pins card heights during a morph.
+ */
+function layout(heights) {
   const masonry = $('notes');
   const width = masonry.clientWidth;
-  const columns = Math.max(1, Math.floor((width + GAP) / (MIN_CARD + GAP)));
-  const cardWidth = (width - GAP * (columns - 1)) / columns;
-  const heights = new Array(columns).fill(0);
   const visible = state.order.map(id => cards.get(id)).filter(card => card && !card.hidden);
-  for (const card of visible) card.style.width = `${cardWidth}px`;
-  for (const card of visible) {
-    const column = heights.indexOf(Math.min(...heights));
-    const slot = { x: column * (cardWidth + GAP), y: heights[column], w: cardWidth, h: card.offsetHeight };
+  const place = (card, slot) => {
     slots.set(card.dataset.id, slot);
     if (!(drag?.active && drag.id === card.dataset.id)) card.style.transform = `translate(${slot.x}px, ${slot.y}px)`;
-    heights[column] += slot.h + GAP;
+  };
+
+  if (state.view === 'honeycomb') {
+    const pitch = HEX_W + HEX_GAP;
+    const columns = Math.max(1, Math.floor((width - pitch / 2 + HEX_GAP) / pitch));
+    const rowStep = HEX_H * 0.75 + HEX_GAP * 0.87;
+    const rows = Math.ceil(visible.length / columns);
+    const combWidth = Math.min(visible.length, columns) * pitch - HEX_GAP + (rows > 1 ? pitch / 2 : 0);
+    const left = Math.max(0, (width - combWidth) / 2);
+    visible.forEach((card, i) => {
+      const row = Math.floor(i / columns);
+      card.style.width = `${HEX_W}px`;
+      card.style.height = `${HEX_H}px`;
+      place(card, { x: left + (i % columns) * pitch + (row % 2 ? pitch / 2 : 0), y: row * rowStep, w: HEX_W, h: HEX_H });
+    });
+    masonry.style.height = `${rows ? (rows - 1) * rowStep + HEX_H : 120}px`;
+    return;
   }
-  masonry.style.height = `${Math.max(120, Math.max(...heights) - GAP)}px`;
+
+  const columns = Math.max(1, Math.floor((width + GAP) / (MIN_CARD + GAP)));
+  const cardWidth = (width - GAP * (columns - 1)) / columns;
+  const tops = new Array(columns).fill(0);
+  for (const card of visible) {
+    card.style.width = `${cardWidth}px`;
+    card.style.height = heights?.has(card.dataset.id) ? `${heights.get(card.dataset.id)}px` : '';
+  }
+  for (const card of visible) {
+    const column = tops.indexOf(Math.min(...tops));
+    const h = heights?.get(card.dataset.id) ?? card.offsetHeight;
+    place(card, { x: column * (cardWidth + GAP), y: tops[column], w: cardWidth, h });
+    tops[column] += h + GAP;
+  }
+  masonry.style.height = `${Math.max(120, Math.max(...tops) - GAP)}px`;
+}
+
+/** Switch between cards and honeycomb, morphing each card into its new shape. */
+function setView(view, animate = !reduceMotion) {
+  for (const button of document.querySelectorAll('.view-switch button')) button.setAttribute('aria-pressed', String(button.dataset.view === view));
+  remember(VIEW_KEY, view);
+  if (view === state.view) return;
+  const masonry = $('notes');
+  const visible = state.order.map(id => cards.get(id)).filter(card => card && !card.hidden);
+  if (!animate) {
+    state.view = view;
+    masonry.classList.toggle('honeycomb', view === 'honeycomb');
+    layout();
+    return;
+  }
+  clearTimeout(setView.timer);
+  let heights;
+  if (view === 'cards') {
+    // Measure each card's natural height in the card layout, then morph from the hexagons to it.
+    masonry.classList.add('instant');
+    masonry.classList.remove('honeycomb');
+    state.view = 'cards';
+    layout();
+    heights = new Map(visible.map(card => [card.dataset.id, card.offsetHeight]));
+    masonry.classList.add('honeycomb');
+    state.view = 'honeycomb';
+    layout();
+  } else {
+    for (const card of visible) card.style.height = `${card.offsetHeight}px`;
+  }
+  masonry.classList.add('instant', 'morphing');
+  void masonry.offsetHeight;
+  masonry.classList.remove('instant');
+  // A ripple: each cell starts a moment after the one before it.
+  visible.forEach((card, i) => { card.style.transitionDelay = `${Math.min(i * 28, 400)}ms`; });
+  state.view = view;
+  masonry.classList.toggle('honeycomb', view === 'honeycomb');
+  layout(heights);
+  setView.timer = setTimeout(() => {
+    masonry.classList.remove('morphing');
+    for (const card of visible) card.style.transitionDelay = '';
+    if (view === 'cards') layout();
+  }, 700 + Math.min(visible.length * 28, 400));
 }
 
 function startDrag(event, id) {
@@ -548,6 +623,9 @@ new ResizeObserver(() => layout()).observe($('notes'));
 setInterval(() => document.querySelectorAll('time[datetime]').forEach(node => { node.textContent = ago(node.getAttribute('datetime')); }), 30000);
 
 try { state.order = JSON.parse(remember(ORDER_KEY) ?? '[]'); } catch { state.order = []; }
+state.view = 'cards';
+for (const button of document.querySelectorAll('.view-switch button')) button.addEventListener('click', () => setView(button.dataset.view));
+if (remember(VIEW_KEY) === 'honeycomb') setView('honeycomb', false);
 // `hivenote ui` opens this page with a key for that launch in the URL's #fragment, which is never
 // sent to any server. Keep it for this tab only and take it out of the address bar.
 const VIEWER_KEY = 'hivenote-viewer-key';
