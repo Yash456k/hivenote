@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -25,9 +26,16 @@ export async function sandbox(t, label = 'test') {
   const base = process.env.TMPDIR || join(root, '.tmp');
   await mkdir(base, { recursive: true });
   const dir = await mkdtemp(join(base, `hivenote-${label}-`));
-  t?.after(() => rm(dir, { recursive: true, force: true }));
+  // Windows can't delete a file that is still open, and a test may close its database in a
+  // later cleanup step. A failed removal must not stop those steps, so retry it at exit.
+  t?.after(() => rm(dir, { recursive: true, force: true }).catch(() => leftovers.add(dir)));
   return dir;
 }
+
+const leftovers = new Set();
+process.once('exit', () => {
+  for (const dir of leftovers) { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } }
+});
 
 export function run(command, args, { cwd = root, env = {}, timeout = 120_000, input, ...options } = {}) {
   return new Promise((resolve, reject) => {
