@@ -181,3 +181,16 @@ test('writes are labeled with the agent running the command, innermost agent fir
   const explicit = await cliJson(['--db', db, '--agent', 'me', 'create', 'explicit'], { env: { CODEX_CI: '1' } });
   assert.equal(explicit.note.last_attribution.agent, 'me');
 });
+
+test('commands take a note name wherever an ID goes, and update-task finds the revision itself', async t => {
+  const db = join(await sandbox(t, 'names'), 'notes.db');
+  await cliJson(['--db', db, 'create', 'build-api', '--kind', 'task', '--description', 'Build the API']);
+  await cliJson(['--db', db, 'claim', 'build-api']);
+  await cliJson(['--db', db, 'append', 'build-api', '--body', 'Endpoint works']);
+  const done = await cliJson(['--db', db, 'update-task', 'build-api', '--status', 'done']);
+  assert.equal(done.note.status, 'done');
+  const read = await cliJson(['--db', db, 'read', 'build-api']);
+  assert.equal(read.updates[0].body, 'Endpoint works');
+  const missing = await run(process.execPath, [cli, '--db', db, 'append', 'nope', '--body', 'x']);
+  assert.match(missing.stderr, /No note named 'nope'/u);
+});

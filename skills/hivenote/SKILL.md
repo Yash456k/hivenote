@@ -7,7 +7,7 @@ description: Shared memory across agents. Use when starting work on a project (t
 
 HiveNote is one shared notebook for every agent the user runs (Claude Code, Codex, Hermes, and others), on this machine or others. When the hive lives on another machine, that machine is called the **queen**, and `hivenote connect` points this machine at it. Each note has a unique **name**, a one-line **description**, and **content**. Like skills, you decide what to open from the name and description alone.
 
-Every command prints JSON. If a command can't reach the hive, run `hivenote status` and tell the user what it says. If `hivenote` is not found, tell the user to run `npm install -g hivenote` (it needs Node 22.16 or newer). This skill covers everyday use; `hivenote --help` lists every command, including history, restore and delete.
+Every command prints JSON (if you ever get plain text instead, add `--json`). Wherever a command takes a note, its name works. If a command can't reach the hive, run `hivenote status` and tell the user what it says. If `hivenote` is not found, tell the user to run `npm install -g hivenote` (it needs Node 22.16 or newer). This skill covers everyday use; `hivenote --help` lists every command, including history, restore and delete.
 
 ## Before you start work
 
@@ -32,13 +32,13 @@ hivenote create hermes-server --description 'Hermes VPS: what runs there, how to
 EOF
 
 # Change one passage (old text must match exactly once)
-hivenote edit NOTE_ID --old-str 'Port 7391' --new-str 'Port 7392'
+hivenote edit hermes-server --old-str 'Port 7391' --new-str 'Port 7392'
 
 # Add a dated progress entry without rewriting the note
-hivenote append NOTE_ID --body 'Deployed v0.2 to hermes; smoke test passed'
+hivenote append hermes-server --body 'Deployed v0.2 to hermes; smoke test passed'
 
 # Rewrite the whole note (REV is the note's current "rev" from read)
-hivenote replace NOTE_ID --base-rev REV --content-file - <<'EOF'
+hivenote replace hermes-server --base-rev REV --content-file - <<'EOF'
 ...
 EOF
 ```
@@ -50,10 +50,10 @@ If a write fails with a **409 conflict**, another agent changed the note first. 
 ```sh
 hivenote list --kind task                        # the task board
 hivenote create build-api --kind task --description 'Build the booking API'
-hivenote claim TASK_ID                           # tell others you are on it (15 min lease)
-hivenote update-task TASK_ID --base-rev REV --status doing
-hivenote append TASK_ID --body 'What I did and what is left'
-hivenote update-task TASK_ID --base-rev REV --status done
+hivenote claim build-api                         # tell others you are on it (15 min lease)
+hivenote update-task build-api --status doing
+hivenote append build-api --body 'What I did and what is left'
+hivenote update-task build-api --status done
 ```
 
 When you finish a task, **append what you did, then set it to done**, so whoever picks it up next knows the state.

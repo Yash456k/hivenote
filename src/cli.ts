@@ -4,12 +4,14 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Server } from 'node:http';
 import { HiveNoteError, isMethod, VERSION, type Actor, type Method, type Params, type Store } from './contract.js';
-import { flag, integerFlag, parse, validateFlags, type Flags } from './args.js';
+import { flag, integerFlag, parse, unknownCommand, validateFlags, type Flags } from './args.js';
 import { parameters, waitOptions } from './params.js';
 import { HttpStore } from './client.js';
 import { configDirectory, defaultDbPath, loadConfig, readToken, resolveConfig, saveConfig, type Config } from './config.js';
 import { assertSupportedNode, detectAgent, quietSqliteWarning } from './runtime.js';
 import { waitForNote } from './wait.js';
+import { pretty } from './pretty.js';
+import { UUID } from './validate.js';
 
 /** The hivenote command: parse arguments, pick local or remote mode, run one command, print JSON. */
 
@@ -50,8 +52,31 @@ interface LocalStore extends Store {
   close(): void;
 }
 
+/** A person at a terminal gets a readable view; agents, pipes and --json get JSON. */
+const view = { human: false, command: '' };
+
 function output(value: unknown): void {
-  process.stdout.write(JSON.stringify(value) + '\n');
+  process.stdout.write((view.human ? pretty(view.command, value) : JSON.stringify(value)) + '\n');
+}
+
+/** Methods that take one note's ID. On the command line its name works too. */
+const ONE_NOTE = new Set<Method>(['edit', 'replace', 'append', 'delete', 'history', 'revision', 'restore', 'claim', 'release', 'update_task']);
+
+/** Turn a note name into its ID, and fill in --base-rev for task updates, with one read. */
+async function resolveNote(store: Store, method: Method, params: Params): Promise<void> {
+  const ref = params.id;
+  if (!ONE_NOTE.has(method) || typeof ref !== 'string') return;
+  if ((method === 'replace' || method === 'delete' || method === 'restore') && params.base_rev === undefined) {
+    throw new HiveNoteError('invalid_args', `${method} needs --base-rev N, the note's current rev (shown by hivenote read), so it can't undo changes you haven't seen`);
+  }
+  const byName = !UUID.test(ref);
+  const needsRev = method === 'update_task' && params.base_rev === undefined;
+  if (!byName && !needsRev) return;
+  const { notes } = await store.call('read', byName ? { names: [ref] } : { ids: [ref] }) as { notes: { id: string; rev: number }[] };
+  const note = notes[0];
+  if (!note) throw new HiveNoteError('not_found', byName ? `No note named '${ref}'` : `No note with ID ${ref}`, 404);
+  params.id = note.id;
+  if (needsRev) params.base_rev = note.rev;
 }
 
 function fail(message: string): never {
@@ -223,7 +248,10 @@ async function runMcp(store: Store, config: Config, positional: string[]): Promi
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   const { flags, positional } = parse(argv);
-  if (flag(flags, 'version') === 'true' || (positional.length === 1 && positional[0] === 'version')) { output({ version: VERSION }); return; }
+  // Readable output only for a person typing in a terminal: never for a detected agent or --agent.
+  view.human = process.stdout.isTTY === true && flag(flags, 'json') !== 'true' && !flags.has('agent') && detectAgent() === undefined;
+  view.command = positional[0] === 'update-task' ? 'update_task' : positional[0] ?? '';
+  if (flag(flags, 'version') === 'true' || (positional.length === 1 && positional[0] === 'version')) { view.command = 'version'; output({ version: VERSION }); return; }
   if (flag(flags, 'help') === 'true' || !positional.length || positional[0] === 'help') { process.stdout.write(HELP); return; }
 
   const requested = positional.shift()!;
@@ -257,14 +285,17 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     await runLocalAdmin(command, config, positional, flags);
     return;
   }
-  if (!isMethod(command) && command !== 'mcp' && command !== 'wait') fail(`Unknown command '${requested}'. Run hivenote --help to see them all.`);
+  if (!isMethod(command) && command !== 'mcp' && command !== 'wait') throw unknownCommand(requested);
 
   const waiting = command === 'wait' ? waitOptions(flags, positional) : undefined;
   const store = await openStore(config, flags);
   if (command === 'mcp') { await runMcp(store, config, positional); return; }
   try {
     if (waiting) output(await waitForNote(store, waiting));
-    else if (isMethod(command)) output(await store.call(command, params));
+    else if (isMethod(command)) {
+      await resolveNote(store, command, params!);
+      output(await store.call(command, params));
+    }
   } finally {
     store.close?.();
   }
@@ -274,6 +305,7 @@ if (process.argv[1] && realpathSync(resolve(process.argv[1])) === fileURLToPath(
   main().catch(error => {
     // Never print arbitrary exceptions, request headers, tokens or stack traces.
     const e = error instanceof HiveNoteError ? error : new HiveNoteError('internal_error', 'Operation failed', 500);
+    if (view.human) { process.stderr.write(`hivenote: ${e.message}\n`); process.exitCode = 1; return; }
     process.stderr.write(JSON.stringify({ error: { code: e.code, message: e.message, status: e.status, ...(e.details === undefined ? {} : { details: e.details }) } }) + '\n');
     process.exitCode = 1;
   });

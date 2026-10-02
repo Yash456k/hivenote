@@ -38,6 +38,31 @@ const METHOD_FLAGS: Record<Method, string[]> = {
   update_task: ['id', 'base-rev', 'status', 'due-at', 'metadata'],
 };
 
+const COMMANDS = [
+  'list', 'read', 'search', 'create', 'edit', 'replace', 'append', 'delete', 'history', 'revision', 'restore', 'changes',
+  'claim', 'release', 'update-task', 'wait', 'serve', 'ui', 'connect', 'disconnect', 'status', 'token', 'backup', 'config', 'mcp', 'version', 'help',
+];
+
+/** Edit distance where swapping two neighbouring letters counts as one edit ("lsit" is one away from "list"). */
+function distance(a: string, b: string): number {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => Array.from({ length: b.length + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0)));
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      d[i]![j] = Math.min(d[i - 1]![j]! + 1, d[i]![j - 1]! + 1, d[i - 1]![j - 1]! + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i]![j] = Math.min(d[i]![j]!, d[i - 2]![j - 2]! + 1);
+    }
+  }
+  return d[a.length]![b.length]!;
+}
+
+export function unknownCommand(command: string): HiveNoteError {
+  const allowed = command.length <= 4 ? 1 : 2;
+  const best = COMMANDS.map(name => ({ name, gap: distance(command.toLowerCase(), name) })).sort((x, y) => x.gap - y.gap)[0]!;
+  const hint = best.gap <= allowed ? ` Did you mean ${best.name}?` : ' Run hivenote --help to see them all.';
+  return new HiveNoteError('invalid_args', `Unknown command '${command}'.${hint}`);
+}
+
 function commandFlags(command: string, action: string | undefined): string[] {
   if (isMethod(command)) return [...METHOD_FLAGS[command], 'params', 'timeout-ms', 'retries', ...(MUTATIONS.has(command) ? ['op-id'] : [])];
   switch (command) {
@@ -49,7 +74,7 @@ function commandFlags(command: string, action: string | undefined): string[] {
     case 'wait': return ['id', 'name', 'status', 'timeout-seconds', 'interval-seconds', 'interval-ms', 'timeout-ms', 'retries'];
     case 'status': return ['timeout-ms'];
     case 'config': case 'show': case 'connect': case 'disconnect': return [];
-    default: throw new HiveNoteError('invalid_args', `Unknown command '${command}'. Run hivenote --help to see them all.`);
+    default: throw unknownCommand(command);
   }
 }
 

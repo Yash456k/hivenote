@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { clientParams, HiveNoteError, type Method, type Params } from './contract.js';
 import { flag, integerFlag, jsonFlag, type Flags } from './args.js';
 import { WAIT_DEFAULTS, type TaskStatus, type WaitOptions } from './wait.js';
+import { UUID } from './validate.js';
 
 /** Turning command-line flags into the parameters each method takes. */
 
@@ -72,7 +73,10 @@ export function parameters(method: Method, flags: Flags, positional: string[]): 
     if (names) set('names', names);
     if (positional.length) {
       if (Object.hasOwn(params, 'ids') || Object.hasOwn(params, 'names')) throw new HiveNoteError('invalid_args', 'Use positional IDs OR selector flags');
-      set('ids', positional);
+      // Note IDs are always UUIDs, so anything else is a name.
+      const names = positional.filter(value => !UUID.test(value));
+      if (names.length && names.length < positional.length) throw new HiveNoteError('invalid_args', 'Use IDs or names, not both');
+      set(names.length ? 'names' : 'ids', positional);
     }
     if (Object.hasOwn(params, 'ids') && Object.hasOwn(params, 'names')) throw new HiveNoteError('invalid_args', 'Use IDs OR names, not both');
   } else {

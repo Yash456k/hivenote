@@ -44,13 +44,22 @@ updated_at, plus status/due/claim for tasks) so an agent can decide what to read
 Edits and replacements that would change nothing are rejected rather than
 creating empty revisions.
 
-All commands output JSON by default (`--json` is also accepted). Errors are JSON
-on stderr with nonzero exit. `--help` and `--version` need no database.
+Commands print JSON for agents, scripts and pipes, with errors as JSON on stderr
+and a nonzero exit. When a person runs a command in a terminal (stdout is a TTY and
+no Claude Code, Codex or Hermes environment and no `--agent` is present), `list`,
+`search`, `read`, `status`, `wait` and the write commands print a readable view
+instead, and errors are one plain line. `--json` always forces JSON; `NO_COLOR`
+turns off bold and dim text. `--help`/`-h`/`help` and `--version`/`-v`/`version`
+need no database, and a mistyped command suggests the closest one.
 `--content`, `--body`, `--old-str`, `--new-str` accept literal strings, including
 empty replacement text. Corresponding `*-file` flags read UTF-8; `-` reads stdin.
 No eval, shell commands or automatic interpretation. `--params '{...}'` exposes
-the same strict method parameter contract for scripts. `read ID...` selects IDs;
-`--names` selects names, never guessed IDs. Repeated `--name`/`--id` also batch.
+the same strict method parameter contract for scripts. On the command line, a note
+argument may be its name or its ID: IDs are always UUIDs, so anything else is a name,
+and the CLI looks it up with one `read` before the call. `read a b` reads by names,
+`read ID ID` by IDs (not mixed). `update-task` without `--base-rev` uses the task's
+current revision; `replace`, `delete` and `restore` still require `--base-rev`.
+Repeated `--name`/`--id` also batch reads.
 
 Description and content are required in the store API but may be empty;
 CLI create defaults both to empty. Names must be nonblank, globally unique among

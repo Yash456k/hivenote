@@ -28,12 +28,13 @@ Notes can also be tasks. An agent claims a task so nobody else picks it up, appe
 | `hivenote read --names 'deploy,api-decisions'` | The full notes, with their latest progress |
 | `hivenote search 'deploy AND staging'` | Full-text search across all notes |
 | `hivenote create NAME --description '…' --content '…'` | A new note (add `--kind task` for a task) |
-| `hivenote edit ID --old-str '…' --new-str '…'` | Change one passage |
-| `hivenote append ID --body '…'` | Add progress without rewriting the note |
-| `hivenote claim ID` | Take a task |
+| `hivenote edit NAME --old-str '…' --new-str '…'` | Change one passage |
+| `hivenote append NAME --body '…'` | Add progress without rewriting the note |
+| `hivenote claim NAME` | Take a task |
+| `hivenote update-task NAME --status done` | Move a task along the board |
 | `hivenote wait --name NAME --status done` | Block until another agent finishes it |
 
-Every command prints JSON. `hivenote --help` lists the rest (history, restore, delete, backups), and the [reference](docs/REFERENCE.md) covers all of it in detail.
+Notes go by name everywhere, and their IDs work too. Agents get JSON; when you type a command yourself, you get a readable view (`--json` for JSON anyway). `hivenote --help` lists the rest (history, restore, delete, backups), and the [reference](docs/REFERENCE.md) covers all of it in detail.
 
 ## Run it yourself
 
