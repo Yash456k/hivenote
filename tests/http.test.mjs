@@ -91,7 +91,7 @@ test('HTTP rejects malformed, oversize, prototype methods and spoofed attributio
   assert.equal((await chunkedOversize(url, rw.token)).status, 413);
   assert.equal((await raw(url, rw.token, '{}', { headers: { 'content-type': 'text/plain' } })).status, 415);
   assert.equal((await fetch(`${url}/unknown`)).status, 404);
-  assert.equal((await fetch(`${url}/health`)).status, 200);
+  assert.equal((await (await fetch(`${url}/health`)).json()).version, JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version);
   assert.equal((await store.call('list')).total, 0);
   assert.deepEqual((await store.call('changes')).events, []);
   assert.equal({}.principal, undefined);
@@ -148,4 +148,26 @@ test('remote client dependency graph is SQLite-free and rejects invalid origins'
   for (const url of ['file:///tmp/a', 'http://user:pass@example.invalid', 'http://example.invalid/path', 'http://example.invalid?x=1', 'not-url']) {
     assert.throws(() => new HttpStore(url, 'token'));
   }
+});
+
+test('a client warns once when the hive runs a different release', async t => {
+  const server = http.createServer((request, response) => {
+    request.resume();
+    response.writeHead(200, { 'content-type': 'application/json', 'x-hivenote-version': '0.1.0' });
+    response.end(JSON.stringify({ result: { notes: [] } }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => closeServer(server));
+  const warnings = [];
+  const write = process.stderr.write;
+  process.stderr.write = text => { warnings.push(String(text)); return true; };
+  try {
+    const client = new HttpStore(serverUrl(server), 'token');
+    await client.call('list');
+    await client.call('list');
+  } finally {
+    process.stderr.write = write;
+  }
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /runs 0\.1\.0.*npm install -g hivenote@latest/u);
 });

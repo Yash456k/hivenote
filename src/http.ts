@@ -2,7 +2,7 @@ import * as http from 'node:http';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isMethod, MUTATIONS, HiveNoteError, type Actor, type Method, type Params } from './contract.js';
+import { isMethod, MUTATIONS, HiveNoteError, VERSION, type Actor, type Method, type Params } from './contract.js';
 
 export interface ServerStore { authenticate(token: string): Actor; execute(method: Method, params: Params, actor: Actor): unknown; }
 export interface ServerOptions {
@@ -49,7 +49,8 @@ const LOCAL_VIEWER: Actor = { principal: 'local-viewer', device: 'local', scope:
 function record(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === 'object' && !Array.isArray(value); }
 function reply(response: http.ServerResponse, status: number, value: unknown): void {
   if (response.destroyed) return;
-  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+  // Clients compare this with their own version and warn when the two drift apart.
+  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'x-hivenote-version': VERSION });
   response.end(JSON.stringify(value));
 }
 function failure(response: http.ServerResponse, error: unknown): void {
@@ -91,7 +92,7 @@ export async function startServer(store: ServerStore, options: ServerOptions = {
   const ui = loadUi();
   const server = http.createServer({ requestTimeout: 15000, headersTimeout: 10000, keepAliveTimeout: 5000, maxHeaderSize: 16384 }, (request, response) => {
     void (async () => {
-      if (request.method === 'GET' && request.url === '/health') { reply(response, 200, { ok: true }); return; }
+      if (request.method === 'GET' && request.url === '/health') { reply(response, 200, { ok: true, version: VERSION }); return; }
       const page = request.method === 'GET' || request.method === 'HEAD' ? ui.get((request.url ?? '').split('?')[0]!) : undefined;
       if (page) {
         response.writeHead(200, { 'content-type': page.type, 'cache-control': 'no-cache', 'content-security-policy': UI_POLICY, 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' });

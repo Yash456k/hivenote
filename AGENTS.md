@@ -16,3 +16,13 @@ node scripts/pack-smoke.mjs   # installs the real tarball and checks the CLI and
 - Prefer one realistic end-to-end test over many narrow ones.
 - Before adding a test, ask: would a user notice if this broke? If not, skip it.
 - When a refactor breaks one of the older narrow tests, delete it rather than rewrite it, unless it guards something a user would notice.
+
+## Keeping users' data safe
+
+People keep their notes in one SQLite file across every update. No release may lose or corrupt it.
+
+- The schema version is `PRAGMA user_version` (`SCHEMA_VERSION` in `src/database.ts`). A schema change bumps it and adds a migration from the previous version; existing files are upgraded, never recreated.
+- Migrations only add things: tables, columns with defaults, indexes. Never drop or rename a table or column that holds user data, and never rewrite note content.
+- Before migrating, copy the file to `<db>.before-v<N>`, then run the whole migration in one transaction.
+- A program that finds a newer schema refuses to open the file (it already does) rather than writing to it.
+- Test each migration once against a real database file made by the previous release.

@@ -1,4 +1,4 @@
-import { clientParams, isMethod, HiveNoteError, type Method, type Params, type Store } from './contract.js';
+import { clientParams, isMethod, HiveNoteError, VERSION, type Method, type Params, type Store } from './contract.js';
 
 export interface HttpStoreOptions { timeoutMs?: number; retries?: number; agent?: string; session?: string; }
 export function validateServerUrl(value: string): URL {
@@ -45,6 +45,7 @@ export class HttpStore implements Store {
         if (attempt < this.retries) { await pause(attempt); continue; }
         throw new HiveNoteError('transport_error', 'Unable to reach HiveNote server', 503);
       }
+      this.checkVersion(response.headers.get('x-hivenote-version'));
       if (response.status === 503 && attempt < this.retries) { await response.body?.cancel(); await pause(attempt); continue; }
       let payload: unknown;
       try { payload = await response.json(); } catch (error) {
@@ -64,6 +65,16 @@ export class HttpStore implements Store {
       if (!Object.hasOwn(object, 'result')) throw new HiveNoteError('invalid_response', 'Server response is missing result', 502);
       return object.result;
     }
+  }
+  private versionChecked = false;
+  /** Warn once when this machine and the hive differ in major or minor version; patches stay quiet. */
+  private checkVersion(server: string | null): void {
+    if (this.versionChecked || !server) return;
+    this.versionChecked = true;
+    const release = (version: string): string => version.split('.').slice(0, 2).join('.');
+    if (release(server) === release(VERSION)) return;
+    const hive = new URL(this.endpoint).origin;
+    process.stderr.write(`hivenote: this machine runs ${VERSION} but the hive at ${hive} runs ${server}. Update the older one with: npm install -g hivenote@latest\n`);
   }
   close(): void {}
 }

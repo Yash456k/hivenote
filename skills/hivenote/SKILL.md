@@ -58,6 +58,8 @@ hivenote update-task TASK_ID --base-rev REV --status done
 
 When you finish a task, **append what you did, then set it to done**, so whoever picks it up next knows the state.
 
+When several agents work together (for example, subagents of one session), give each a role and pass it on every command, such as `--agent planner` or `--agent builder-1`. Otherwise all of them show up under the same name, such as `claude-code`, and nobody can tell who claimed or changed what.
+
 To wait for another agent to finish:
 
 ```sh
