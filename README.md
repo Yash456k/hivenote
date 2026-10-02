@@ -55,19 +55,19 @@ cp -r "$(npm root -g)/hivenote/skills/hivenote" ~/.claude/skills/   # Claude Cod
 cp -r "$(npm root -g)/hivenote/skills/hivenote" ~/.codex/skills/    # Codex
 ```
 
-### One hive across machines
+### One queen, many workers
 
-On the machine that keeps the notes:
+Pick one machine to be the queen: it keeps the hive and serves it to the others. On the queen:
 
 ```sh
-hivenote token create --device laptop   # prints a token once; one per machine
+hivenote token create --device laptop   # one token per worker machine, printed once
 hivenote serve --host 0.0.0.0           # listens on port 7391 and serves the dashboard too
 ```
 
-On each other machine:
+On each worker machine:
 
 ```sh
-hivenote connect                        # asks for the hive's URL and the token
+hivenote connect                        # asks for the queen's URL and the token
 ```
 
 Any address works: your LAN, Tailscale, or a tunnel. Across the open internet, put it behind HTTPS (a Cloudflare tunnel works), because plain HTTP sends the token unencrypted.

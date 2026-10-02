@@ -72,8 +72,8 @@ Default data paths are outside the installation:
 **Keep the database, WAL and SHM on local disk only. Never put them on Dropbox,
 Syncthing, an SMB/NFS/network share or another synchronization service.** The
 program does not reliably detect every filesystem or sync-folder type. Multiple
-processes on the same machine may open the same local file. Other devices use
-HTTP to that database's owner, not copies of its file.
+processes on the same machine may open the same local file. Other machines connect
+over HTTP to the queen, the one machine that keeps the hive, never to copies of its file.
 
 ## Inert tasks and concurrency
 
@@ -100,7 +100,7 @@ script can do that, e.g. `hivenote wait --name X --status done && your-command`.
 
 Statuses: `todo`, `doing`, `done`, `cancelled`; `--due-at null` clears a due date.
 Claims are atomic cooperative leases, not scheduling or authorization. Expiry is
-checked against the DB owner's clock when claiming; nothing wakes or runs later.
+checked against the queen's clock (this machine's, for a local hive) when claiming; nothing wakes or runs later.
 Claim owner comes from the token principal, not a body field. `--force` on claim
 or release explicitly overrides another owner and is recorded; any rw client may
 use it. Local direct users trust the filesystem and share principal `local`;
@@ -116,9 +116,10 @@ immutable receipt and event sequence. Reuse a stable `--op-id` when retrying a
 failed transport; changed method/payload/principal with that ID is a conflict.
 Do not reuse an operation ID for a new intent.
 
-## Remote authority and tokens
+## The queen and worker machines
 
-On the database-owner machine:
+One machine is the **queen**: it keeps the hive's database and serves it. Every
+other machine is a **worker** that connects to it. On the queen:
 
 ```sh
 hivenote --db /path/on/local/disk/notes.db token create --device laptop --scope rw
@@ -136,7 +137,7 @@ with `hivenote --db PATH token revoke CLIENT_UUID`; revocation also denies recei
 replays. `ro` can read all notes/history, `rw` can mutate all notes; there are no
 per-note ACLs or separate force-operation roles.
 
-On a client device, connect once. It asks for the URL and the token (typed
+On each worker machine, connect once. It asks for the URL and the token (typed
 hidden), checks they work, and keeps the token privately in HiveNote's config
 folder. Every command, including agents', then uses that hive:
 
@@ -238,7 +239,7 @@ authority**. Session/repo/command references, due dates and task text are inert.
 
 ## Transport options: configure yourself
 
-A private SSH forward needs no public bind: `ssh -L 7391:127.0.0.1:7391 OWNER_HOST`,
+A private SSH forward needs no public bind: `ssh -L 7391:127.0.0.1:7391 QUEEN_HOST`,
 then use `http://127.0.0.1:7391`. Tailscale routing is also possible; bind explicitly
 to an intended interface or use your existing proxy, applying your own ACLs.
 Use HTTPS or an authenticated encrypted tunnel off-machine: HTTP alone does not
@@ -266,13 +267,13 @@ authentication platform is provisioned here.
 snapshot and checks SQLite integrity; existing destinations are refused. POSIX
 DB/backup/config permissions are restrictive. Windows requires the user's own
 ACLs. Backups include note history, immutable receipts and token hashes: treat
-them as sensitive. To restore, stop users of the authoritative DB, select the
-backup as the replacement local database, verify reads, and restart clients at
-that single authority. Do not copy a live main DB without its WAL or run both
-restored and original databases as competing authorities.
+them as sensitive. To restore, stop everything using the queen's database, select
+the backup as the replacement local database, verify reads, and reconnect the
+workers to that one queen. Do not copy a live main DB without its WAL or run the
+restored and original databases side by side as two queens.
 
 Offline remote operations fail; there is no queue or sync conflict resolution.
-SQLite synchronous work blocks the owner's Node process briefly; this is a
+SQLite synchronous work blocks the queen's Node process briefly; this is a
 small tool, not a high-throughput multi-tenant service. History/receipts
 are retained indefinitely. Offset pagination is accurate per request but can
 shift across concurrent requests; use the monotonic changes cursor for a complete
