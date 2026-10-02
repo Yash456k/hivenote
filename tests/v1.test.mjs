@@ -155,8 +155,19 @@ test('hivenote connect checks the token, then every command uses the remote hive
 
   assert.equal((await cliJson(['connect', url], { env: laptop, input: token + '\n' })).connected, url);
   assert.deepEqual((await cliJson(['list'], { env: laptop })).notes.map(note => note.name), ['on-hive']);
+  const status = await cliJson(['status'], { env: laptop });
+  assert.equal(status.hive, 'queen');
+  assert.equal(status.notes, 1);
   await cliJson(['disconnect'], { env: laptop });
   assert.equal((await cliJson(['list'], { env: laptop })).total, 0);
+  assert.equal((await cliJson(['status'], { env: laptop })).hive, 'local');
+
+  await cliJson(['connect', url], { env: laptop, input: token + '\n' });
+  server.kill();
+  await new Promise(resolve => server.once('exit', resolve));
+  const down = await run(process.execPath, [cli, 'status'], { env: laptop });
+  assert.notEqual(down.code, 0);
+  assert.match(down.stderr, /Can't reach the queen/u);
 });
 
 test('writes are labeled with the agent running the command, innermost agent first', async t => {

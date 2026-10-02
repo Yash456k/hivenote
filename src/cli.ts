@@ -28,7 +28,8 @@ Tasks:    claim ID | release ID | update-task ID --base-rev N --status todo|doin
           wait --name NAME|--id ID [--status done] [--interval-seconds 5] [--timeout-seconds 540|0]
 Machines: serve [--host 127.0.0.1] [--port 7391]   (also serves the live dashboard at /)
           ui [--port 7391] [--no-open]             (opens the dashboard; this machine needs no token)
-          connect [URL] | disconnect               (use a hive on another machine, or go back to local)
+          connect [URL] | disconnect               (use the queen: a hive on another machine; or go back to local)
+          status                                   (is the hive reachable, and which one is this machine using?)
           token create --device LABEL [--scope ro|rw] | token list | token revoke ID
           backup DEST | config set|show|reset | mcp
 
@@ -166,6 +167,45 @@ async function runLocalAdmin(command: 'token' | 'backup' | 'serve' | 'ui', confi
   }
 }
 
+/** status: which hive this machine uses and whether it answers. Problems exit nonzero with a plain reason. */
+async function runStatus(config: Config, flags: Flags): Promise<void> {
+  if (!config.url) {
+    const store = await openLocalStore(config);
+    try {
+      const { total } = await store.call('list', { limit: 1 }) as { total: number };
+      output({ hive: 'local', db: config.db ?? defaultDbPath(), notes: total, version: VERSION });
+    } finally {
+      store.close();
+    }
+    return;
+  }
+  const url = config.url;
+  const timeoutMs = flags.has('timeout-ms') ? integerFlag(flag(flags, 'timeout-ms')!, '--timeout-ms') : 10000;
+  let health: { ok?: boolean; version?: string };
+  try {
+    const response = await fetch(new URL('/health', url), { redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
+    health = await response.json() as typeof health;
+  } catch {
+    throw new HiveNoteError('queen_unreachable', `Can't reach the queen at ${url}. Check that it is running and that this machine can reach it.`, 503);
+  }
+  if (health?.ok !== true) throw new HiveNoteError('not_a_queen', `${url} answered, but it isn't a HiveNote queen.`, 502);
+  const store = new HttpStore(url, readToken(config), { timeoutMs, retries: 0 });
+  const started = performance.now();
+  let total: number;
+  try {
+    ({ total } = await store.call('list', { limit: 1 }) as { total: number });
+  } catch (error) {
+    if (error instanceof HiveNoteError && error.status === 401) {
+      throw new HiveNoteError('token_rejected', `The queen at ${url} rejected this machine's token. Create a new one on the queen (hivenote token create) and run hivenote connect again.`, 401);
+    }
+    throw error;
+  }
+  output({
+    hive: 'queen', url, reachable: true, token: 'accepted', notes: total,
+    queen_version: health.version ?? 'unknown', this_version: VERSION, round_trip_ms: Math.round(performance.now() - started),
+  });
+}
+
 async function runMcp(store: Store, config: Config, positional: string[]): Promise<void> {
   if (positional.length) { store.close?.(); fail('Unexpected mcp arguments'); }
   try {
@@ -206,6 +246,11 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   const detected = config.agent === undefined ? detectAgent() : undefined;
   if (detected) config.agent = detected;
   if (command === 'show') { output({ ...config, configDirectory: configDirectory(), defaultDb: defaultDbPath() }); return; }
+  if (command === 'status') {
+    if (positional.length) fail('Unexpected status arguments');
+    await runStatus(config, flags);
+    return;
+  }
 
   if (command === 'token' || command === 'backup' || command === 'serve' || command === 'ui') {
     await runLocalAdmin(command, config, positional, flags);

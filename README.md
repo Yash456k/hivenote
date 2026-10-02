@@ -68,6 +68,7 @@ On each worker machine:
 
 ```sh
 hivenote connect                        # asks for the queen's URL and the token
+hivenote status                         # checks the queen answers and the token works
 ```
 
 Any address works: your LAN, Tailscale, or a tunnel. Across the open internet, put it behind HTTPS (a Cloudflare tunnel works), because plain HTTP sends the token unencrypted.

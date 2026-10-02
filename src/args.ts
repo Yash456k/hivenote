@@ -47,6 +47,7 @@ function commandFlags(command: string, action: string | undefined): string[] {
     case 'ui': return ['host', 'port', 'no-open'];
     case 'mcp': return ['timeout-ms', 'retries'];
     case 'wait': return ['id', 'name', 'status', 'timeout-seconds', 'interval-seconds', 'interval-ms', 'timeout-ms', 'retries'];
+    case 'status': return ['timeout-ms'];
     case 'config': case 'show': case 'connect': case 'disconnect': return [];
     default: throw new HiveNoteError('invalid_args', 'Unknown command');
   }

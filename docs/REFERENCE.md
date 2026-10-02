@@ -145,7 +145,13 @@ folder. Every command, including agents', then uses that hive:
 hivenote connect              # Hive URL: http://100.64.0.5:7391   Token: ••••
 echo "$TOKEN" | hivenote connect https://notes.example.com   # scripted
 hivenote disconnect           # back to the local database
+hivenote status               # which hive this machine uses, and whether it answers
 ```
+
+`status` prints `{"hive":"queen", "reachable":true, "token":"accepted", "notes", "queen_version",
+"this_version", "round_trip_ms"}` on a worker, or `{"hive":"local", "db", "notes", "version"}`
+when the hive is on this machine. If the queen can't be reached or rejects the token, it
+says which on stderr and exits nonzero.
 
 Any reachable address works: LAN, Tailscale, a public IP or a tunnel. Over the
 open internet use `https://` (for example a Cloudflare tunnel), because plain
