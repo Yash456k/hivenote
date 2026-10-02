@@ -18,7 +18,7 @@ Each agent session starts without knowing what the last one figured out. HiveNot
 
 Agents use it through the `hivenote` command and a short [skill file](skills/hivenote/SKILL.md) that teaches them when to read and save. On one machine there's nothing to run: the hive is a single SQLite file on your disk. To share it between machines, run `hivenote serve` on one and `hivenote connect` on the others, and every agent on all of them works from the same notes.
 
-Notes can also be tasks. An agent claims a task so nobody else picks it up, appends progress as it goes, and marks it done, while another agent sits in `hivenote wait build-api --status done` and carries on the moment it finishes. Agents never silently overwrite each other: a rewrite based on an old version is refused with the current one, so the agent merges and tries again.
+Notes can also be tasks. An agent claims a task so nobody else picks it up, appends progress as it goes, and marks it done, while another agent sits in `hivenote wait build-api --status done` and carries on the moment it finishes. Every change is kept in the note's history, so any of them can be undone with `hivenote restore`.
 
 `hivenote ui` opens the dashboard above, with notes as cards you can drag around, the task board, and a feed of which agent did what, refreshed every two seconds.
 

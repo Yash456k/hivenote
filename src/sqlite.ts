@@ -15,22 +15,19 @@ const PARAMETERS: Record<Method, readonly string[]> = {
   read: ['ids', 'names'],
   search: ['query', 'offset', 'limit', 'detail'],
   create: ['id', 'name', 'description', 'content', 'kind', 'metadata', 'status', 'due_at', 'op_id'],
-  edit: ['id', 'note', 'old_str', 'new_str', 'base_rev', 'op_id'],
-  replace: ['id', 'note', 'content', 'name', 'description', 'metadata', 'base_rev', 'op_id'],
+  edit: ['id', 'note', 'old_str', 'new_str', 'op_id'],
+  replace: ['id', 'note', 'content', 'name', 'description', 'metadata', 'op_id'],
   append: ['id', 'note', 'body', 'op_id'],
-  delete: ['id', 'note', 'base_rev', 'op_id'],
+  delete: ['id', 'note', 'op_id'],
   history: ['id', 'note', 'offset', 'limit'],
   revision: ['id', 'note', 'rev'],
-  restore: ['id', 'note', 'rev', 'base_rev', 'op_id'],
+  restore: ['id', 'note', 'rev', 'op_id'],
   changes: ['since', 'limit', 'tail'],
-  claim: ['id', 'note', 'ttl_seconds', 'force', 'base_rev', 'op_id'],
-  release: ['id', 'note', 'force', 'base_rev', 'op_id'],
-  update_task: ['id', 'note', 'status', 'due_at', 'metadata', 'base_rev', 'op_id'],
+  claim: ['id', 'note', 'ttl_seconds', 'force', 'op_id'],
+  release: ['id', 'note', 'force', 'op_id'],
+  update_task: ['id', 'note', 'status', 'due_at', 'metadata', 'op_id'],
 };
 
-/** Writes that overwrite state must name the revision they are based on; these may. */
-const REQUIRES_BASE_REV = new Set<Method>(['replace', 'delete', 'restore']);
-const OPTIONAL_BASE_REV = new Set<Method>(['edit', 'claim', 'release', 'update_task']);
 
 interface Receipt { note: Note; event_seq: number; op_id: string }
 
@@ -43,6 +40,22 @@ function searchQuery(query: string): string {
   if (/["()*^:]|\b(AND|OR|NOT|NEAR)\b/u.test(query)) return query;
   const words = query.split(/\s+/u).filter(Boolean);
   return words.length ? words.map(word => `"${word}"`).join(' ') : query;
+}
+
+/** One answer stays under 5 MB, however big the notes and their history get. */
+const ANSWER_BYTES = 5 * 1024 * 1024;
+const size = (value: unknown): number => Buffer.byteLength(JSON.stringify(value));
+
+/** The leading items that fit in one answer; always at least one, so callers keep moving. */
+function fitting<T>(items: T[]): T[] {
+  const kept: T[] = [];
+  let used = 0;
+  for (const item of items) {
+    used += size(item);
+    if (kept.length && used > ANSWER_BYTES) break;
+    kept.push(item);
+  }
+  return kept;
 }
 
 export function localActor(): Actor {
@@ -117,8 +130,6 @@ export class SqliteStore implements Store {
     }
 
     let note = this.find(p, method === 'restore');
-    if (REQUIRES_BASE_REV.has(method)) this.checkRevision(note, p.base_rev);
-    if (OPTIONAL_BASE_REV.has(method) && p.base_rev !== undefined) this.checkRevision(note, p.base_rev);
 
     let eventKind = method as string;
     switch (method) {
@@ -234,11 +245,6 @@ export class SqliteStore implements Store {
     return JSON.parse(row.snapshot as string) as Note;
   }
 
-  private checkRevision(note: Note, baseRev: unknown): void {
-    if (integer(baseRev, 'base_rev', 1) !== note.rev) this.conflict(note, 'Revision mismatch; read current note before retrying');
-  }
-
-  /** A 409 that carries the current note, so the caller can merge and retry. */
   private conflict(note: Note, message: string): never {
     throw new HiveNoteError('conflict', message, 409, { current: note });
   }
@@ -295,19 +301,30 @@ export class SqliteStore implements Store {
 
     const notes: Note[] = [];
     const missing: string[] = [];
+    const too_big: string[] = [];
     const updates: Event[] = [];
     let updates_has_more = false;
+    let used = 0;
     for (const key of keys) {
       const row = this.get(`SELECT * FROM notes WHERE ${byId ? 'id' : 'name'}=? AND deleted_at IS NULL`, key);
       if (!row) { missing.push(key); continue; }
       const note = toNote(row);
+      // Past the size limit, the rest are named so the caller can read them in another call.
+      if (notes.length && used + size(note) > ANSWER_BYTES) { too_big.push(key); continue; }
+      used += size(note);
       notes.push(note);
       const appends = this.all("SELECT * FROM events WHERE note_id=? AND kind='append' ORDER BY seq DESC LIMIT 21", note.id);
       if (appends.length > 20) updates_has_more = true;
-      updates.push(...appends.slice(0, 20).reverse().map(toEvent));
+      const recent: Event[] = [];
+      for (const event of appends.slice(0, 20).map(toEvent)) {
+        if (used + size(event) > ANSWER_BYTES) { updates_has_more = true; break; }
+        used += size(event);
+        recent.push(event);
+      }
+      updates.push(...recent.reverse());
     }
     updates.sort((a, b) => a.seq - b.seq);
-    return { notes, missing, updates, updates_has_more };
+    return { notes, missing, updates, updates_has_more, ...(too_big.length ? { too_big } : {}) };
   }
 
   private search(p: Params): unknown {
@@ -331,7 +348,7 @@ export class SqliteStore implements Store {
     const note = this.find(p, true);
     const { limit, offset } = this.page(p);
     const total = Number(this.get('SELECT count(*) AS n FROM events WHERE note_id=?', note.id)?.n);
-    const events = this.all('SELECT * FROM events WHERE note_id=? ORDER BY seq LIMIT ? OFFSET ?', note.id, limit, offset).map(toEvent);
+    const events = fitting(this.all('SELECT * FROM events WHERE note_id=? ORDER BY seq LIMIT ? OFFSET ?', note.id, limit, offset).map(toEvent));
     return { events, total, offset, has_more: offset + events.length < total };
   }
 
@@ -339,16 +356,16 @@ export class SqliteStore implements Store {
   private changes(p: Params): unknown {
     if (p.tail !== undefined) {
       if (p.since !== undefined || p.limit !== undefined) invalid('changes accepts tail, or since/limit, not both');
-      const rows = this.all('SELECT * FROM events ORDER BY seq DESC LIMIT ?', integer(p.tail, 'tail', 1, 100)).reverse();
+      const newest = fitting(this.all('SELECT * FROM events ORDER BY seq DESC LIMIT ?', integer(p.tail, 'tail', 1, 100)).map(toEvent));
       // The cursor points at the head, so polling continues from now.
       const head = Number(this.get('SELECT coalesce(max(seq),0) AS seq FROM events')?.seq);
-      return { events: rows.map(toEvent), cursor: head, has_more: false };
+      return { events: newest.reverse(), cursor: head, has_more: false };
     }
     const since = p.since === undefined ? 0 : integer(p.since, 'since', 0);
     const { limit } = this.page(p);
     const rows = this.all('SELECT * FROM events WHERE seq>? ORDER BY seq LIMIT ?', since, limit + 1);
-    const events = rows.slice(0, limit).map(toEvent);
-    return { events, cursor: events.at(-1)?.seq ?? since, has_more: rows.length > limit };
+    const events = fitting(rows.slice(0, limit).map(toEvent));
+    return { events, cursor: events.at(-1)?.seq ?? since, has_more: rows.length > events.length };
   }
 
   // ---------- Administration (local only) ----------

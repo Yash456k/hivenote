@@ -11,11 +11,21 @@ let stdin: string | undefined;
 function readTextFile(path: string): string {
   try {
     // '-' means stdin; read it once even if several flags use it.
-    if (path === '-') return stdin ??= readFileSync(0, 'utf8');
-    return readFileSync(path, 'utf8');
+    if (path === '-') return stdin ??= decode(readFileSync(0));
+    return decode(readFileSync(path));
   } catch {
     throw new HiveNoteError('invalid_args', 'Cannot read input file');
   }
+}
+
+/**
+ * Text is UTF-8 almost everywhere. A file saved in an older Windows encoding isn't, and
+ * reading it as UTF-8 would turn letters like é into question marks, so read it as
+ * Windows-1252 (Western European) instead.
+ */
+function decode(bytes: Buffer): string {
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+  catch { return new TextDecoder('windows-1252').decode(bytes); }
 }
 
 /** --content TEXT or --content-file PATH (never both). */
@@ -39,7 +49,7 @@ export function parameters(method: Method, flags: Flags, positional: string[]): 
   // --name is only replace's rename; the note itself is always the positional name.
   const strings = ['name', 'description', 'query', 'kind', 'status'];
   for (const key of strings) if (flag(flags, key) !== undefined) set(key, flag(flags, key));
-  for (const key of ['base-rev', 'rev', 'offset', 'limit', 'since', 'ttl-seconds', 'tail']) {
+  for (const key of ['rev', 'offset', 'limit', 'since', 'ttl-seconds', 'tail']) {
     const value = flag(flags, key);
     if (value !== undefined) set(key.replaceAll('-', '_'), integerFlag(value, `--${key}`));
   }
@@ -78,9 +88,6 @@ export function parameters(method: Method, flags: Flags, positional: string[]): 
       if (!Object.hasOwn(params, 'description')) params.description = '';
       if (!Object.hasOwn(params, 'content')) params.content = '';
     }
-  }
-  if ((method === 'replace' || method === 'delete' || method === 'restore') && !Object.hasOwn(params, 'base_rev')) {
-    throw new HiveNoteError('invalid_args', `${method} needs --base-rev N, the note's current rev (shown by hivenote read), so it can't undo changes you haven't seen`);
   }
   return clientParams(method, params);
 }

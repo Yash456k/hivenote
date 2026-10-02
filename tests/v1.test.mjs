@@ -35,7 +35,7 @@ test('edits and replacements that change nothing are rejected instead of creatin
   t.after(() => store.close());
   const { note } = await store.call('create', fixture({ content: 'fix pending' }));
   await assert.rejects(store.call('edit', { id: note.id, old_str: 'x', new_str: 'x' }), error => error.code === 'validation_error');
-  await assert.rejects(store.call('replace', { id: note.id, base_rev: 1, content: 'fix pending' }), error => error.code === 'validation_error');
+  await assert.rejects(store.call('replace', { id: note.id, content: 'fix pending' }), error => error.code === 'validation_error');
   const [current] = (await store.call('read', { ids: [note.id] })).notes;
   assert.equal(current.rev, 1);
 });

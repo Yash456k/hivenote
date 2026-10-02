@@ -29,12 +29,12 @@ hivenote list --limit 20
 hivenote read build-context acceptance
 hivenote search 'design AND decisions'
 hivenote edit build-context --old-str 'old wording' --new-str 'new wording'
-hivenote replace build-context --base-rev 2 --content-file - < replacement.txt
+hivenote replace build-context --content-file - < replacement.txt
 hivenote append build-context --body-file progress.txt
 hivenote history build-context --limit 20
 hivenote revision build-context --rev 1
-hivenote delete build-context --base-rev 3
-hivenote restore build-context --rev 1 --base-rev 4
+hivenote delete build-context
+hivenote restore build-context --rev 1     # undo: bring back version 1
 hivenote changes --since 0 --limit 100
 ```
 
@@ -59,8 +59,7 @@ their name: `read a b` reads several, and the others take one, as in `append a`.
 `history`, `revision` and `restore` also find a deleted note by its name (the most
 recently deleted one, if the name was used more than once). Notes keep an internal
 ID so renames and reused names never mix up their histories; it appears in JSON
-output but no command asks for it. `replace`, `delete` and `restore` require
-`--base-rev`; `edit`, `claim`, `release` and `update-task` accept it as an extra guard.
+output but no command asks for it.
 
 Description and content are required in the store API but may be empty;
 CLI create defaults both to empty. Names must be nonblank, globally unique among
@@ -116,11 +115,11 @@ or release explicitly overrides another owner and is recorded; any rw client may
 use it. Local direct users trust the filesystem and share principal `local`;
 agent labels do **not** create isolated owners or permissions.
 
-Full replacements, deletes, restores and task updates require `base_rev`.
-Stale writes return 409 plus the current authorized snapshot and attribution.
-Exact edit operates on current content and requires exactly one match (including
-overlapping matches); optional `base_rev` adds strict version checking. String
-matching is not a guarantee of semantic correctness. Appends record distinct
+Every change is recorded in the note's history with who made it, and `restore`
+brings back any earlier version (deleted notes too), so nothing is ever lost.
+There is no version checking: the latest write wins. `edit` works on the current
+text and needs its old text to match exactly once, so an edit based on outdated
+text is refused (409 with the current note) rather than applied in the wrong place. Appends record distinct
 contributions without changing content or rev. All successful writes return an
 immutable receipt and event sequence. Reuse a stable `--op-id` when retrying a
 failed transport; changed method/payload/principal with that ID is a conflict.

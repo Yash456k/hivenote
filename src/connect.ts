@@ -54,7 +54,14 @@ function ask(question: string, hidden: boolean): Promise<string> {
 export async function connect(givenUrl: string | undefined): Promise<{ connected: string; entries: number }> {
   if (givenUrl === undefined && !process.stdin.isTTY) throw new HiveNoteError('invalid_args', 'Pass the URL when piping the token: echo $TOKEN | hivenote connect URL');
   const url = (givenUrl ?? await ask('Hive URL: ', false)).replace(/\/+$/u, '');
-  validateServerUrl(url);
+  const parsed = validateServerUrl(url);
+  // The token travels with every request. Plain http is readable by anyone on the same network,
+  // except on this machine or over Tailscale, which encrypts the traffic itself.
+  const host = parsed.hostname.replace(/^\[|\]$/gu, '');
+  const tailscale = /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./u.test(host) || host.endsWith('.ts.net');
+  if (parsed.protocol === 'http:' && !['localhost', '127.0.0.1', '::1'].includes(host) && !tailscale) {
+    process.stderr.write('hivenote: warning: this address uses plain http, so the token can be read by anyone on the same network. Use https (for example a Cloudflare tunnel) or Tailscale.\n');
+  }
   const token = await ask('Token: ', true);
   if (!token) throw new HiveNoteError('invalid_args', 'A token is required. Create one on the hive machine: hivenote token create --device NAME');
 

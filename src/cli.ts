@@ -28,9 +28,9 @@ Notes:    list [--kind task] [--status S] [--full]   names and descriptions (--f
           create NAME --description TEXT --content TEXT [--kind task]
           edit NAME --old-str TEXT --new-str TEXT  change one passage
           append NAME --body TEXT                  add progress without rewriting the note
-          replace NAME --base-rev N --content TEXT [--name NEW] [--description TEXT]
-          delete NAME --base-rev N | restore NAME --rev N --base-rev N
-          history NAME | revision NAME --rev N | changes [--since SEQ | --tail N]
+          replace NAME --content TEXT [--name NEW] [--description TEXT]
+          delete NAME | history NAME | restore NAME --rev N   (undo: bring back a version from history)
+          revision NAME --rev N | changes [--since SEQ | --tail N]
 Tasks:    claim NAME | release NAME | update-task NAME --status todo|doing|done|cancelled
           wait NAME [--status done] [--interval-seconds 5] [--timeout-seconds 540|0]
 Machines: serve [--host 127.0.0.1] [--port 7391]   (the queen: serves the hive and its dashboard)
@@ -175,6 +175,8 @@ async function runServer(store: LocalStore, command: 'serve' | 'ui', positional:
 
 /** Commands that need the database file on this machine. */
 async function runLocalAdmin(command: 'token' | 'backup' | 'serve' | 'ui', config: Config, positional: string[], flags: Flags): Promise<void> {
+  // A server must keep answering everyone, so it waits only briefly for another process's write.
+  if (command === 'serve' || command === 'ui') (await import('./database.js')).lockWait.ms = 200;
   const store = await openLocalStore(config);
   let keepOpen = false;
   try {

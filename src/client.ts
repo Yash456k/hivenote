@@ -37,6 +37,8 @@ export class HttpStore implements Store {
     if (!isMethod(method)) throw new HiveNoteError('invalid_method', 'Unknown method');
     const body = JSON.stringify({ method, params: clientParams(method, params), ...this.labels });
     if (Buffer.byteLength(body) > 1024 * 1024) throw new HiveNoteError('body_too_large', 'Request exceeds 1 MiB', 413);
+    // "Busy" means another writer holds the hive for a moment; keep trying for a few seconds.
+    const busyUntil = Date.now() + 5000;
     for (let attempt = 0; ; attempt++) {
       let response: Response;
       try {
@@ -46,7 +48,7 @@ export class HttpStore implements Store {
         throw new HiveNoteError('transport_error', 'Unable to reach HiveNote server', 503);
       }
       this.checkVersion(response.headers.get('x-hivenote-version'));
-      if (response.status === 503 && attempt < this.retries) { await response.body?.cancel(); await pause(attempt); continue; }
+      if (response.status === 503 && (attempt < this.retries || Date.now() < busyUntil)) { await response.body?.cancel(); await pause(attempt); continue; }
       let payload: unknown;
       try { payload = await response.json(); } catch (error) {
         // A truncated connection after headers is still a transport failure.

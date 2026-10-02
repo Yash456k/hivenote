@@ -79,7 +79,7 @@ test('response lost after commit: retry returns original receipt, one event, act
   assert.equal(created.note.last_attribution.agent, 'sdk-regression');
   assert.equal(created.note.last_attribution.session, 'session-1');
   assert.equal((await store.call('history', { id: created.note.id })).total, 1);
-  await client.call('replace', { id: created.note.id, content: 'later revision', base_rev: 1 });
+  await client.call('replace', { id: created.note.id, content: 'later revision' });
   assert.deepEqual(await client.call('create', request), created);
   await assert.rejects(client.call('create', { ...request, content: 'different' }), e => e.status === 409);
   const other = store.tokenCreate('other-device', 'rw');

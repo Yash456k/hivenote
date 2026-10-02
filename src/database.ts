@@ -75,9 +75,16 @@ export function storageError(error: unknown): never {
   throw new HiveNoteError('storage_error', 'Database operation failed', 500);
 }
 
+/**
+ * How long to wait for another process's write. A command can wait 5 seconds; a server
+ * waits 0.2 seconds and answers "busy" instead, because while it waits it can't answer
+ * anyone else. Clients retry busy answers on their own.
+ */
+export const lockWait = { ms: 5000 };
+
 /** Retry briefly while another process holds the lock. */
 export function retryWhileBusy<T>(fn: () => T): T {
-  const deadline = Date.now() + 5000;
+  const deadline = Date.now() + lockWait.ms;
   for (;;) {
     try {
       return fn();
@@ -119,12 +126,16 @@ export function openDatabase(path: string): DatabaseSync {
 
   const db = new DatabaseSync(path);
   try {
-    db.exec('PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;');
+    db.exec(`PRAGMA busy_timeout=${lockWait.ms}; PRAGMA foreign_keys=ON;`);
+    // A file from a newer HiveNote is left exactly as it is: check before changing anything.
+    if (Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version) > SCHEMA_VERSION) {
+      throw new HiveNoteError('schema_version', 'This hive was made by a newer HiveNote; update HiveNote on this machine to open it', 500);
+    }
     retryWhileBusy(() => db.exec('PRAGMA journal_mode=WAL;'));
     // Serialized by the write lock, so two processes opening a new file migrate it once.
     transaction(db, () => {
       const version = Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version);
-      if (version > SCHEMA_VERSION) throw new HiveNoteError('schema_version', 'Database schema is newer than this program', 500);
+      if (version > SCHEMA_VERSION) throw new HiveNoteError('schema_version', 'This hive was made by a newer HiveNote; update HiveNote on this machine to open it', 500);
       if (version === 0) db.exec(SCHEMA);
     });
   } catch (error) {

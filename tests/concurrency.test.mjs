@@ -64,15 +64,3 @@ test('10 real processes × 100 writes survive simultaneous fresh-database initia
   }
 });
 
-test('20 independent processes share one optimistic revision: exactly one winner', { timeout: 180_000 }, async t => {
-  const dir = await sandbox(t, 'race');
-  const path = join(dir, 'race.sqlite');
-  const store = new SqliteStore(path, actor());
-  t.after(() => store.close());
-  const { note } = await store.call('create', fixture());
-  const results = await processes(t, i => [path, String(i), '1', 'race', note.id], 20);
-  assert.equal(results.filter(r => r.winner).length, 1);
-  assert.equal(results.filter(r => !r.winner && r.status === 409).length, 19);
-  assert.equal((await store.call('read', { ids: [note.id] })).notes[0].rev, 2);
-  assert.equal((await store.call('history', { id: note.id })).total, 2);
-});

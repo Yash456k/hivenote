@@ -37,13 +37,13 @@ hivenote edit hermes-server --old-str 'Port 7391' --new-str 'Port 7392'
 # Add a dated progress entry without rewriting the note
 hivenote append hermes-server --body 'Deployed v0.2 to hermes; smoke test passed'
 
-# Rewrite the whole note (REV is the note's current "rev" from read)
-hivenote replace hermes-server --base-rev REV --content-file - <<'EOF'
+# Rewrite the whole note (read it first, so you keep what others added)
+hivenote replace hermes-server --content-file - <<'EOF'
 ...
 EOF
 ```
 
-If a write fails with a **409 conflict**, another agent changed the note first. Read it again, merge your change into the new version, and retry.
+If an `edit` fails because the old text no longer matches, another agent changed the note first: read it again and redo your edit. Every change stays in `hivenote history NAME`, and `hivenote restore NAME --rev N` brings back an earlier version.
 
 ## Tasks and handoffs
 

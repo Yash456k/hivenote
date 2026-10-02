@@ -17,15 +17,14 @@ test('native CLI flags, UTF-8 file/stdin inputs and task aliases preserve litera
   assert.equal(created.note.content, content);
   await assert.rejects(access(join(dir, 'MUST_NOT_EXIST')));
   assert.equal((await cliJson([...args, 'read', 'Native flag note'], { env })).notes[0].id, created.note.id);
-  const replaced = await cliJson([...args, 'replace', 'Native flag note', '--base-rev', '1', '--content-file', '-'], { env, input: 'stdin Résumé\n' });
+  const replaced = await cliJson([...args, 'replace', 'Native flag note', '--content-file', '-'], { env, input: 'stdin Résumé\n' });
   assert.equal(replaced.note.content, 'stdin Résumé\n');
-  const edited = await cliJson([...args, 'edit', 'Native flag note', '--old-str', 'Résumé', '--new-str', 'EDITED', '--base-rev', '2'], { env });
+  const edited = await cliJson([...args, 'edit', 'Native flag note', '--old-str', 'Résumé', '--new-str', 'EDITED'], { env });
   assert.equal(edited.note.content, 'stdin EDITED\n');
   const appended = await cliJson([...args, 'append', 'Native flag note', '--body-file', '-'], { env, input: 'activity 日本語' });
   assert.equal(appended.note.rev, 3);
   for (const bad of [
     [...args, 'create', 'bad', '--content', 'x', '--content-file', file],
-    [...args, 'replace', 'Native flag note', '--base-rev', 'NaN', '--content', 'x'],
     [...args, 'create', '--params', '[1,2]'],
     [...args, 'list', '--unknown-flag', 'x'],
     [...args, 'list', '--limit'],

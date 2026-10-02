@@ -9,7 +9,7 @@ const BOOLEAN_FLAGS = new Set(['help', 'version', 'json', 'force', 'full', 'no-o
 const VALUE_FLAGS = [
   'db', 'url', 'token-file', 'agent', 'session', 'timeout-ms', 'retries', 'params', 'op-id',
   'name', 'description', 'content', 'content-file', 'body', 'body-file',
-  'old-str', 'old-str-file', 'new-str', 'new-str-file', 'base-rev', 'rev', 'query', 'offset', 'limit',
+  'old-str', 'old-str-file', 'new-str', 'new-str-file', 'rev', 'query', 'offset', 'limit',
   'kind', 'status', 'due-at', 'metadata', 'since', 'ttl-seconds', 'device', 'scope', 'destination',
   'host', 'port', 'timeout-seconds', 'interval-seconds', 'interval-ms', 'tail',
 ];
@@ -25,17 +25,17 @@ const METHOD_FLAGS: Record<Method, string[]> = {
   read: [],
   search: ['query', 'offset', 'limit', 'full'],
   create: ['description', 'kind', 'status', 'due-at', 'metadata', ...TEXT_FLAGS],
-  edit: ['base-rev', 'old-str', 'old-str-file', 'new-str', 'new-str-file', ...TEXT_FLAGS],
-  replace: ['base-rev', 'name', 'description', 'metadata', ...TEXT_FLAGS],
+  edit: ['old-str', 'old-str-file', 'new-str', 'new-str-file', ...TEXT_FLAGS],
+  replace: ['name', 'description', 'metadata', ...TEXT_FLAGS],
   append: [...TEXT_FLAGS],
-  delete: ['base-rev'],
+  delete: [],
   history: ['offset', 'limit'],
   revision: ['rev'],
-  restore: ['rev', 'base-rev'],
+  restore: ['rev'],
   changes: ['since', 'limit', 'tail'],
-  claim: ['ttl-seconds', 'force', 'base-rev'],
-  release: ['force', 'base-rev'],
-  update_task: ['base-rev', 'status', 'due-at', 'metadata'],
+  claim: ['ttl-seconds', 'force'],
+  release: ['force'],
+  update_task: ['status', 'due-at', 'metadata'],
 };
 
 const COMMANDS = [

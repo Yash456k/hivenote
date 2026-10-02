@@ -42,8 +42,7 @@ function listing(notes: Brief[], value: { total?: number; offset?: number; has_m
 
 function notePage(note: Note, updates: Update[]): string {
   const lines = [bold(note.name), dim(note.description)];
-  const task = note.kind === 'task' ? `Task · ${note.status ?? 'todo'}${note.claimed_by ? ` · claimed by ${note.claimed_by}` : ''} · ` : '';
-  lines.push(dim(`${task}rev ${note.rev}`));
+  if (note.kind === 'task') lines.push(dim(`Task · ${note.status ?? 'todo'}${note.claimed_by ? ` · claimed by ${note.claimed_by}` : ''}`));
   if (note.content) lines.push('', note.content);
   const mine = updates.filter(update => update.note_id === note.id && update.body);
   if (mine.length) {
@@ -68,12 +67,14 @@ export function pretty(command: string, value: unknown): string {
       const pages = (v.notes as Note[]).map(note => notePage(note, (v.updates as Update[] | undefined) ?? []));
       const missing = v.missing as string[];
       if (missing.length) pages.push(dim(`Not found: ${missing.join(', ')}`));
+      const tooBig = v.too_big as string[] | undefined;
+      if (tooBig?.length) pages.push(dim(`Too much to show at once: ${tooBig.join(', ')}. Read them separately.`));
       return pages.join(`\n\n${dim('─'.repeat(40))}\n\n`);
     }
     case 'wait': return `${dim(v.reason === 'status' ? 'Reached the status you waited for.' : 'It changed.')}\n\n${notePage(v.note as Note, (v.updates as Update[] | undefined) ?? [])}`;
   }
   const note = v.note as Note | undefined;
   if (note && command === 'update_task') return `Moved ${bold(note.name)} to ${note.status ?? 'todo'}`;
-  if (note && DONE[command]) return `${DONE[command]} ${bold(note.name)}${command === 'append' || command === 'claim' || command === 'release' ? '' : dim(` (rev ${note.rev})`)}`;
+  if (note && DONE[command]) return `${DONE[command]} ${bold(note.name)}`;
   return JSON.stringify(value, null, 2);
 }

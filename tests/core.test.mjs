@@ -29,10 +29,10 @@ const fail = (fn, status, code) => assert.rejects(fn, error => {
   assert.deepEqual((await store.call('read', { names: [original.name, 'missing'] })).missing, ['missing']);
   assert.equal((await store.call('read', { ids: [id] })).notes[0].id, id);
   await fail(() => store.call('read', { names: [original.name], ids: [id] }), 400);
-  const edited = await store.call('edit', { id, old_str: 'alpha', new_str: 'ALPHA', base_rev: 1 });
+  const edited = await store.call('edit', { id, old_str: 'alpha', new_str: 'ALPHA' });
   assert.equal(edited.note.rev, 2);
   assert.equal(edited.note.content, 'unique needle\nALPHA\nbeta');
-  const replaced = await store.call('replace', { id, content: 'new body', description: 'changed', base_rev: 2 });
+  const replaced = await store.call('replace', { id, content: 'new body', description: 'changed' });
   assert.equal(replaced.note.rev, 3);
   assert.equal((await store.call('revision', { id, rev: 1 })).note.content, original.content);
   assert.equal((await store.call('revision', { id, rev: 2 })).note.content, edited.note.content);
@@ -58,24 +58,14 @@ const fail = (fn, status, code) => assert.rejects(fn, error => {
   assert.equal(next.has_more, false);
 });
 
-test('exact edits reject absent/ambiguous matches; optimistic conflicts never mutate', async t => {
+test('an edit whose old text does not match exactly once is refused and changes nothing', async t => {
   const { store } = await storeFor(t);
   const { note } = await store.call('create', fixture({ content: 'same same\nunique' }));
   await fail(() => store.call('edit', { id: note.id, old_str: 'same', new_str: 'one' }), 409);
   await fail(() => store.call('edit', { id: note.id, old_str: 'absent', new_str: 'x' }), 409);
   await fail(() => store.call('edit', { id: note.id, old_str: '', new_str: 'x' }), 400);
-  const edited = await store.call('edit', { id: note.id, old_str: 'unique', new_str: 'edited', base_rev: 1 });
+  const edited = await store.call('edit', { id: note.id, old_str: 'unique', new_str: 'edited' });
   assert.equal(edited.note.rev, 2);
-  for (const [method, body] of [
-    ['replace', { content: 'stale' }], ['delete', {}], ['restore', { rev: 1 }],
-    ['edit', { old_str: 'edited', new_str: 'stale' }],
-  ]) {
-    await assert.rejects(store.call(method, { id: note.id, base_rev: 1, ...body }), error => {
-      assert.equal(error.status, 409);
-      assert.equal(error.details.current.rev, 2);
-      return true;
-    });
-  }
   assert.equal((await store.call('read', { ids: [note.id] })).notes[0].content, edited.note.content);
   assert.equal((await store.call('history', { id: note.id })).total, 2);
 });
@@ -85,9 +75,9 @@ test('online backup restores notes, history, tombstones, receipts and authentica
   const token = store.tokenCreate('backup-device', 'rw');
   const request = params(fixture({ name: 'backup-note' }));
   const created = store.execute('create', request, actor());
-  await store.call('replace', { id: created.note.id, content: 'backed-up', base_rev: 1 });
+  await store.call('replace', { id: created.note.id, content: 'backed-up' });
   const other = await store.call('create', fixture({ name: 'backup-deleted' }));
-  await store.call('delete', { id: other.note.id, base_rev: 1 });
+  await store.call('delete', { id: other.note.id });
   const expected = await store.call('changes', { since: 0 });
   const backupPath = join(dir, 'backup with spaces 日本語.sqlite');
   assert.equal((await store.backup(backupPath)).path, backupPath);
@@ -106,7 +96,6 @@ test('validation, name collision, read-only scope and reopen persistence', async
   await fail(() => store.call('create', fixture({ name: 'collision' })), 409);
   await assert.rejects(store.call('create', { name: '', content: 'missing description' }));
   await assert.rejects(store.call('list', { offset: -1 }));
-  await assert.rejects(store.call('replace', { id: note.note.id, content: 'missing revision' }));
   for (const [method, input] of [
     ['read', {}], ['read', { ids: [] }], ['read', { ids: [123] }],
     ['list', { limit: 0 }], ['list', { offset: 1.5 }],

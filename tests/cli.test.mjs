@@ -17,16 +17,13 @@ async function exercise(args, env) {
   assert.equal((await hive('search', 'unique')).total, 1);
   assert.equal((await hive('edit', name, '--old-str', 'unique', '--new-str', 'edited')).note.content, 'alpha edited beta');
   assert.equal((await hive('append', name, '--body', 'CLI activity')).note.rev, 2);
-  assert.equal((await hive('replace', name, '--content', 'replacement', '--base-rev', '2')).note.rev, 3);
+  assert.equal((await hive('replace', name, '--content', 'replacement')).note.rev, 3);
   assert.equal((await hive('revision', name, '--rev', '1')).note.content, 'alpha unique beta');
   assert.equal((await hive('history', name)).total, 4);
-  const stale = await run(process.execPath, [cli, ...args, 'replace', name, '--content', 'stale', '--base-rev', '1'], { env });
-  assert.notEqual(stale.code, 0);
-  assert.match(`${stale.stderr}\n${stale.stdout}`, /conflict|revision|409/iu);
-  assert.equal((await hive('delete', name, '--base-rev', '3')).note.rev, 4);
+  assert.equal((await hive('delete', name)).note.rev, 4);
   // A deleted note is still found by name to look back at or restore.
   assert.equal((await hive('history', name)).total, 5);
-  assert.equal((await hive('restore', name, '--rev', '1', '--base-rev', '4')).note.rev, 5);
+  assert.equal((await hive('restore', name, '--rev', '1')).note.rev, 5);
   await hive('create', 'CLI task', '--kind', 'task');
   assert.ok((await hive('claim', 'CLI task')).note.claimed_by);
   assert.equal((await hive('release', 'CLI task')).note.claimed_by, null);

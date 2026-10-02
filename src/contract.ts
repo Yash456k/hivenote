@@ -44,20 +44,20 @@ export function clientParams(method: Method, params: Params = {}): Params {
   return out;
 }
 
-/* Stable v0.1 wire contract (all optional fields omitted, not undefined):
+/* Wire contract (notes are named by `note`, their name; `id` is still accepted from older clients) (all optional fields omitted, not undefined):
  list {offset?,limit?,kind?,status?,detail?:'brief'|'full'} => {notes: BriefNote[] (or Omit<Note,'content'>[] when full), total,offset,has_more}
  read {ids?:string[],names?:string[]} exactly one selector => {notes:Note[],missing:string[]}
  search {query,offset?,limit?,detail?} => {notes:(BriefNote&{snippet})[],total,offset,has_more}
  create {id?:UUID,name,description,content,kind?,metadata?,status?,due_at?,op_id}
- edit {id,old_str,new_str,base_rev?,op_id}; replace {id,content?,name?,description?,metadata?,base_rev,op_id}
- append {id,body,op_id}; delete {id,base_rev,op_id}
- history {id,offset?,limit?} => {events:Event[],total,offset,has_more} (deleted IDs allowed)
- revision {id,rev} => {note:Note}
- restore {id,rev,base_rev,op_id} (deleted ID allowed)
+ edit {note|id,old_str,new_str,op_id}; replace {note|id,content?,name?,description?,metadata?,op_id}
+ append {note|id,body,op_id}; delete {note|id,op_id}
+ history {note|id,offset?,limit?} => {events:Event[],total,offset,has_more} (deleted IDs allowed)
+ revision {note|id,rev} => {note:Note}
+ restore {note|id,rev,op_id} (deleted ID allowed)
  changes {since?:seq,limit?} | {tail:1-100} => {events:Event[],cursor,has_more}
- claim {id,ttl_seconds?:number,force?:boolean,base_rev?,op_id} default 900 seconds
- release {id,force?:boolean,base_rev?,op_id}
- update_task {id,base_rev,status?,due_at?:ISO|null,metadata?,op_id}
+ claim {note|id,ttl_seconds?:number,force?:boolean,op_id} default 900 seconds
+ release {note|id,force?:boolean,op_id}
+ update_task {note|id,status?,due_at?:ISO|null,metadata?,op_id}
  Every mutation returns immutable {note:Note,event_seq:number,op_id:string}; append leaves rev unchanged.
  All errors HiveNoteError; conflict 409 details {current:Note}. Metadata/references inert.
  */
