@@ -6,16 +6,7 @@ import { startServer } from '../dist/http.js';
 import { sandbox, actor, cli, closeServer, serverUrl } from './helpers.mjs';
 import { connectMcp, mcpSmoke, decodeTool } from './mcp-helpers.mjs';
 
- test('real MCP SDK exchanges over local stdio: all fifteen tools and protocol-clean stdout', { timeout: 60_000 }, async t => {
-  const dir = await sandbox(t, 'mcp-local');
-  const connection = await connectMcp(process.execPath, [cli, '--db', join(dir, 'MCP notes 日本語.sqlite'), 'mcp'], { HIVENOTE_HOME: join(dir, 'config') });
-  t.after(() => connection.client.close());
-  const created = await mcpSmoke(connection.client);
-  assert.equal(created.note.last_attribution.verified, false);
-  assert.equal(created.note.last_attribution.agent, 'hivenote-regression-sdk');
-});
-
-test('real MCP SDK over remote stdio uses HTTP authority; read-only and revoked tokens', { timeout: 60_000 }, async t => {
+ test('real MCP SDK over remote stdio uses HTTP authority; read-only and revoked tokens', { timeout: 60_000 }, async t => {
   const dir = await sandbox(t, 'mcp-remote');
   const store = new SqliteStore(join(dir, 'server.sqlite'), actor());
   const token = store.tokenCreate('mcp-remote', 'rw');

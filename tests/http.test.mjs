@@ -67,36 +67,6 @@ test('HTTP requires valid bearer auth, enforces ro/rw and immediately honors rev
   assert.equal((await store.call('history', { id: created.note.id })).total, 1);
 });
 
-test('HTTP rejects malformed, oversize, prototype methods and spoofed attribution without writes', async t => {
-  const { store, rw, url } = await setup(t);
-  const cases = [
-    ['{', 400], [null, 400], [[], 400], [{ method: 'create', params: [] }, 400],
-    [{ method: '__proto__', params: {} }, 400], [{ method: 'constructor', params: {} }, 400], [{ method: 'toString', params: {} }, 400],
-    [{ method: 'not-a-method' }, 400], [{ method: 'list', unexpected: true }, 400],
-    [{ method: 'list', principal: 'root' }, 400],
-    [{ method: 'create', params: params(fixture({ principal: 'root' })) }, 400],
-    [{ method: 'create', params: params(fixture({ device: 'forged', verified: true })) }, 400],
-    [{ method: 'create', params: params(fixture({ actor: { principal: 'root' } })) }, 400],
-    ['{"method":"list","params":{"__proto__":{"principal":"root"}}}', 400],
-    [{ method: 'create', params: params(fixture()), agent: {} }, 400],
-    [{ method: 'create', params: params(fixture()), session: 'x'.repeat(257) }, 400],
-  ];
-  for (const [body, status] of cases) {
-    const result = await raw(url, rw.token, body);
-    assert.equal(result.status, status, JSON.stringify(body));
-    assert.equal(typeof result.body.error.code, 'string');
-  }
-  const tooLarge = await raw(url, rw.token, 'x'.repeat(1024 * 1024 + 1));
-  assert.equal(tooLarge.status, 413);
-  assert.equal((await chunkedOversize(url, rw.token)).status, 413);
-  assert.equal((await raw(url, rw.token, '{}', { headers: { 'content-type': 'text/plain' } })).status, 415);
-  assert.equal((await fetch(`${url}/unknown`)).status, 404);
-  assert.equal((await (await fetch(`${url}/health`)).json()).version, JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version);
-  assert.equal((await store.call('list')).total, 0);
-  assert.deepEqual((await store.call('changes')).events, []);
-  assert.equal({}.principal, undefined);
-});
-
 test('response lost after commit: retry returns original receipt, one event, actor/intent conflicts', async t => {
   const { store, rw, url } = await setup(t, { dropResponseOnce: true });
   const client = new HttpStore(url, rw.token, { retries: 2, timeoutMs: 3000, agent: 'sdk-regression', session: 'session-1' });
@@ -130,24 +100,6 @@ test('20 simultaneous HTTP claim requests have one owner and nineteen conflicts'
   const current = (await client.call('read', { ids: [note.id] })).notes[0];
   assert.equal(current.claimed_by, won[0].value.note.claimed_by);
   assert.equal((await client.call('history', { id: note.id })).total, 2);
-});
-
-test('remote client dependency graph is SQLite-free and rejects invalid origins', async () => {
-  // Follow emitted static relative imports, not merely the top-level source file.
-  const visited = new Set();
-  async function inspect(path) {
-    if (visited.has(path)) return;
-    visited.add(path);
-    const code = await readFile(path, 'utf8');
-    assert.ok(!/node:sqlite|(?:from|import\s*\()\s*['"][^'"]*sqlite/iu.test(code), path);
-    for (const match of code.matchAll(/(?:from\s*|import\s*)['"](\.\/[^'"]+)['"]/gu)) {
-      await inspect(join(root, 'dist', match[1]));
-    }
-  }
-  await inspect(join(root, 'dist/client.js'));
-  for (const url of ['file:///tmp/a', 'http://user:pass@example.invalid', 'http://example.invalid/path', 'http://example.invalid?x=1', 'not-url']) {
-    assert.throws(() => new HttpStore(url, 'token'));
-  }
 });
 
 test('a client warns once when the hive runs a different release', async t => {

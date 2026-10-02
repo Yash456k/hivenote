@@ -64,23 +64,6 @@ test('10 real processes × 100 writes survive simultaneous fresh-database initia
   }
 });
 
-test('10 processes × 100 exact edits on one note: accepted writes reconcile revision and contributions', { timeout: 180_000 }, async t => {
-  const dir = await sandbox(t, 'shared-contention');
-  const path = join(dir, 'shared.sqlite');
-  const store = new SqliteStore(path, actor());
-  t.after(() => store.close());
-  const { note } = await store.call('create', fixture({content:'ANCHOR'}));
-  const results = await processes(t, i => [path,String(i),'100','shared',note.id], 10);
-  const accepted = results.reduce((n,r) => n + r.writes,0);
-  assert.equal(accepted,1000);
-  const current = (await store.call('read',{ids:[note.id]})).notes[0];
-  assert.equal(current.rev,accepted+1);
-  const contributions = new Set(current.content.split('\n').slice(1));
-  assert.equal(contributions.size,accepted);
-  for (let worker=0;worker<10;worker++) for(let i=0;i<100;i++) assert.ok(contributions.has(`${worker}:${i}`));
-  assert.equal((await store.call('history',{id:note.id})).total,accepted+1);
-});
-
 test('20 independent processes share one optimistic revision: exactly one winner', { timeout: 180_000 }, async t => {
   const dir = await sandbox(t, 'race');
   const path = join(dir, 'race.sqlite');

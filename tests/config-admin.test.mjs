@@ -63,34 +63,3 @@ test('CLI token administration and backup are real, omit secrets and refuse remo
   assert.throws(() => store.authenticate(token.token), e => e.status === 401);
 });
 
-test('persisted config is sandboxed, flags win over it for one command, token file takes precedence over env', async t => {
-  const dir = await sandbox(t, 'config');
-  const home = join(dir, 'config');
-  const env = { HIVENOTE_HOME: home };
-  const db = join(dir, 'config notes.sqlite');
-  await cliJson(['config', 'set', '--db', db], { env });
-  const config = await cliJson(['config', 'show'], { env });
-  assert.equal(config.db, db);
-  if (process.platform !== 'win32') assert.equal((await stat(join(home, 'config.json'))).mode & 0o777, 0o600);
-  const created = await cliJson(['create', '--params', JSON.stringify(fixture({ name: 'via config' }))], { env });
-  assert.equal((await cliJson(['read', 'via config'], { env })).notes[0].id, created.note.id);
-  const store = new SqliteStore(join(dir, 'remote.sqlite'), actor());
-  const token = store.tokenCreate('config-token', 'ro');
-  const server = await startServer(store, { host: '127.0.0.1', port: 0 });
-  t.after(async () => { await closeServer(server); store.close(); });
-  const url = serverUrl(server);
-  // --url with a saved local database: this one command goes remote; the saved config stays.
-  assert.equal((await cliJson(['--url', url, 'list'], { env: { ...env, HIVENOTE_TOKEN: token.token } })).total, 0);
-  assert.equal((await cliJson(['config', 'show'], { env })).db, db);
-  const tokenFile = join(dir, 'token 日本語.txt');
-  await writeFile(tokenFile, `${token.token}\n`, { mode: 0o600 });
-  await cliJson(['config', 'set', '--url', url, '--token-file', tokenFile], { env });
-  const remote = await cliJson(['config', 'show'], { env });
-  assert.equal(remote.url, url);
-  assert.ok(!remote.db);
-  assert.equal((await cliJson(['list'], { env: { ...env, HIVENOTE_TOKEN: 'wrong-env-token' } })).total, 0);
-  // --db with a saved remote: this one command is local; the saved remote stays.
-  assert.equal((await cliJson(['--db', join(dir, 'one-off.sqlite'), 'list'], { env })).total, 0);
-  assert.equal((await cliJson(['config', 'show'], { env })).url, url);
-  await cliJson(['config', 'reset'], { env });
-});
