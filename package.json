@@ -1,7 +1,7 @@
 {
   "name": "hivenote",
   "version": "0.2.3",
-  "description": "Shared memory and inert task data for agents, backed by one authoritative SQLite database",
+  "description": "One shared notebook for all your AI agents: notes, tasks and handoffs across Claude Code, Codex, Hermes and more, with a live dashboard.",
   "type": "module",
   "bin": {
     "hivenote": "dist/cli.js"
@@ -41,5 +41,16 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Yash456k/hivenote.git"
-  }
+  },
+  "keywords": [
+    "ai-agents",
+    "claude-code",
+    "codex",
+    "agent-memory",
+    "shared-memory",
+    "mcp",
+    "sqlite",
+    "cli"
+  ],
+  "homepage": "https://www.npmjs.com/package/hivenote"
 }
