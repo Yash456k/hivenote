@@ -8,7 +8,7 @@ import { HiveNoteError, VERSION, type Actor, type Method, type Params, type Stor
 import { HttpStore } from './client.js';
 import { configDirectory, defaultDbPath, loadConfig, readToken, resolveConfig, type Config } from './config.js';
 import { assertSupportedNode, detectAgent, quietSqliteWarning } from './runtime.js';
-import { waitForNote, type TaskStatus } from './wait.js';
+import { waitForAnyChange, waitForNote, type TaskStatus } from './wait.js';
 import { pretty } from './pretty.js';
 
 /** The hivenote command: read the words, pick this machine's hive or the queen's, run one command. */
@@ -32,7 +32,8 @@ Tasks
   hivenote task NAME "description"        a new task
   hivenote tasks                          the board: status, who, how long ago
   hivenote mark NAME doing                (or todo, done, cancelled)
-  hivenote wait NAME [done]               wait until it is done, or until it changes at all
+  hivenote wait NAME [done]               wait until it is done, or until it is added or changes at all
+  hivenote wait                           wait until anything in the hive changes
 
 Machines
   hivenote serve [HOST][:PORT]            be the queen: share this hive (default 127.0.0.1:7391)
@@ -222,11 +223,14 @@ const NOTES: Record<string, { usage: string; min: number; max: number; run: Run 
   },
   mark: { usage: `mark NAME ${STATUSES.join('|')}`, min: 2, max: 2, run: ([note, status], store) => store.call('update_task', { note, status: taskStatus(status!) }) },
   wait: {
-    usage: 'wait NAME [done]', min: 1, max: 2,
-    run: ([name, status], store) => waitForNote(store, {
-      name: name!, ...(status === undefined ? {} : { status: taskStatus(status) }),
-      timeoutSeconds: 540, intervalMs: 5000,
-    }),
+    usage: 'wait [NAME] [done]', min: 0, max: 2,
+    run: ([name, status], store) => name === undefined
+      ? waitForAnyChange(store, { timeoutSeconds: 540, intervalMs: 5000 })
+      : waitForNote(store, {
+        name, ...(status === undefined ? {} : { status: taskStatus(status) }),
+        timeoutSeconds: 540, intervalMs: 5000,
+        notice: message => { process.stderr.write(`hivenote: ${message}\n`); },
+      }),
   },
 };
 

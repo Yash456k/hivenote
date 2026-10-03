@@ -6,6 +6,21 @@ import { detectAgent, isSupportedNode, MINIMUM_NODE } from '../dist/runtime.js';
 import { spawn } from 'node:child_process';
 import { cli, cliJson, fixture, run, sandbox } from './helpers.mjs';
 
+test('wait holds on for a note that does not exist yet, and wait with no name wakes on any change', async t => {
+  const db = join(await sandbox(t, 'wait-new'), 'notes.db');
+  await cliJson(['--db', db, 'add', 'old-note', 'here from the start']);
+  const forNote = run(process.execPath, [cli, '--db', db, 'wait', 'api-notes']);
+  const forAnything = run(process.execPath, [cli, '--db', db, 'wait']);
+  await new Promise(resolve => setTimeout(resolve, 3000));
+  await cliJson(['--db', db, 'add', 'api-notes', 'the API']);
+
+  const [note, anything] = await Promise.all([forNote, forAnything]);
+  assert.equal(note.code, 0, note.stderr);
+  assert.match(note.stderr, /waiting for it to be added/u);
+  assert.equal(JSON.parse(note.stdout).reason, 'added');
+  assert.deepEqual(JSON.parse(anything.stdout).changes.map(change => [change.note, change.kind]), [['api-notes', 'create']]);
+});
+
 test('local CLI commands print no SQLite experimental warning', async t => {
   const db = join(await sandbox(t, 'quiet'), 'notes.db');
   const result = await run(process.execPath, [cli, '--db', db, 'list']);

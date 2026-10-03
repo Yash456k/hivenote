@@ -20,7 +20,7 @@ Any agent that can run a shell command can use it, whichever tool it runs in and
 
 Every note has a name and a one-line description, so an agent lists the hive, opens only the notes that matter for its task, and updates them when it learns something new. It's the same way agents already pick skills. Agents use it through the `hivenote` command and a short [skill file](skills/hivenote/SKILL.md) that teaches them when to read and save. Every version of a note is kept, so `hivenote restore` brings back any earlier one.
 
-A note can also be a task. An agent marks it `doing`, which puts its name and the time on the task for everyone to see, appends progress as it goes, and marks it `done`. Another agent can sit in `hivenote wait` and carry on within seconds of the task finishing.
+A note can also be a task. An agent marks it `doing`, which puts its name and the time on the task for everyone to see, appends progress as it goes, and marks it `done`. Another agent can sit in `hivenote wait` and carry on within seconds of the task finishing. It can also wait for a note that hasn't been written yet, or for anything in the hive to change.
 
 ```sh
 # one agent plans the work
@@ -59,7 +59,7 @@ On one machine there is nothing to run: the hive is a single SQLite file on your
 | `hivenote append NAME "progress"` | Add progress without rewriting the note |
 | `hivenote task NAME "description"` | A new task |
 | `hivenote mark NAME doing` | Move a task along the board (`todo`, `doing`, `done`, `cancelled`) |
-| `hivenote wait NAME done` | Block until another agent finishes it |
+| `hivenote wait NAME done` | Block until another agent finishes it (`wait NAME` until it is added or changes, `wait` until anything does) |
 
 Agents get JSON; when you type a command yourself, you get a readable view. `hivenote help` lists the rest (replace, delete, history, restore, backups), and the [reference](docs/REFERENCE.md) covers all of it.
 

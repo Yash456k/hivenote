@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2
+
+- **`wait` holds on for a note that doesn't exist yet.** `hivenote wait api-notes` used to fail when nobody had added `api-notes`; now it says so and wakes when someone does. `hivenote wait build-api done` waits until the task exists and is done.
+- **`hivenote wait` with no name** wakes when anything in the hive changes, and lists what did.
+
 ## 0.3.1
 
 Fixes found by reviewing 0.3.0 as a new user would meet it. Update the queen and restart `hivenote serve`, then the workers. Notes, tokens and connections are kept.

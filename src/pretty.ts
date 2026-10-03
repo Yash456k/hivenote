@@ -6,6 +6,7 @@
 interface Brief { name: string; description: string; kind: string; status?: string | null; snippet?: string; updated_at?: string; updated_by?: string }
 interface Note extends Brief { id: string; content: string; rev: number; last_attribution?: Who }
 interface Who { agent?: string; device?: string }
+interface Change { note: string; kind: string; by: string; at: string; body?: string; status?: string }
 interface Event { note_id: string; kind: string; revision: number | null; body: string | null; timestamp: string; attribution?: Who }
 
 const color = !process.env.NO_COLOR;
@@ -55,6 +56,12 @@ const KIND: Record<string, string> = {
   create: 'created', edit: 'edited', replace: 'rewritten', delete: 'deleted', restore: 'restored', update_task: 'marked',
 };
 
+/** One change in the hive: the note, what happened to it, who did it and when. */
+function change(c: Change): string {
+  const what = c.kind === 'append' ? `progress: ${c.body ?? ''}` : c.kind === 'update_task' ? `marked ${c.status ?? ''}` : KIND[c.kind] ?? c.kind;
+  return `${bold(c.note)}  ${what}  ${dim(`${c.by}, ${ago(c.at)}`)}`;
+}
+
 function history(events: Event[]): string {
   if (!events.length) return 'No history.';
   const lines = events.map(event => {
@@ -80,7 +87,12 @@ export function pretty(command: string, value: unknown): string {
       if (tooBig?.length) pages.push(dim(`Too much to show at once: ${tooBig.join(', ')}. Read them separately.`));
       return pages.join(`\n\n${dim('─'.repeat(40))}\n\n`);
     }
-    case 'wait': return `${dim(v.reason === 'status' ? 'Reached the status you waited for.' : 'It changed.')}\n\n${page(note!, (v.updates as Event[] | undefined) ?? [])}`;
+    case 'wait': {
+      const changes = v.changes as Change[] | undefined;
+      if (changes) return `${dim('The hive changed.')}\n\n${changes.map(change).join('\n')}`;
+      const why = v.reason === 'status' ? 'Reached the status you waited for.' : v.reason === 'added' ? 'It was added.' : 'It changed.';
+      return `${dim(why)}\n\n${page(note!, (v.updates as Event[] | undefined) ?? [])}`;
+    }
     case 'history': return `${Number(v.offset) > 0 ? dim(`(${String(v.offset)} earlier changes not shown)`) + '\n' : ''}${history(v.events as Event[])}`;
     case 'add': return `Added ${bold(note!.name)}`;
     case 'task': return `Added task ${bold(note!.name)}`;
