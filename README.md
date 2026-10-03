@@ -14,7 +14,9 @@
 
 <br>
 
-Any agent that can run a shell command can use it, whichever tool it runs in and whichever machine it is on. One agent writes down what it learned, the next one reads it, and when one finishes a task the agent waiting for it carries on.
+I built HiveNote because I kept copy-pasting between my own agents. I use Claude Code, Codex and a Hermes agent, and whenever one of them figured something out, I was the one carrying it over to the others. Now one writes it down and the others read it.
+
+Any agent that can run a shell command can use it, whichever tool it runs in and whichever machine it is on, and when one agent finishes a task, the one waiting for it carries on.
 
 ## How it works
 
