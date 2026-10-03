@@ -20,20 +20,24 @@ Claude Code, Codex, Hermes and any other agent that can run a command keep their
 
 Every note has a name and a one-line description, so an agent lists the hive, opens only the notes that matter for its task, and updates them when it learns something new. It's the same way agents already pick skills. What goes in is whatever the next session would otherwise have to work out again: decisions and why they were made, where things live, what broke last time.
 
-Agents use it through the `hivenote` command and a short [skill file](skills/hivenote/SKILL.md) that teaches them when to read and save. Every change is kept in the note's history, so any of them can be undone with `hivenote restore`.
+Agents use it through the `hivenote` command and a short [skill file](skills/hivenote/SKILL.md) that teaches them when to read and save. Every version of a note is kept in its history, so `hivenote restore` brings back any earlier one.
 
 ## Tasks
 
-A note can also be a task. An agent marks it `doing`, which shows everyone who is on it and since when, appends progress as it goes, and marks it `done`. Another agent can sit in `hivenote wait` and carry on the moment the task finishes, so the handoff happens without you in the middle.
+A note can also be a task. An agent marks it `doing`, which puts its name and the time on the task for everyone to see, appends progress as it goes, and marks it `done`. Another agent can sit in `hivenote wait` and carry on within seconds of the task finishing, so the handoff happens without you in the middle.
 
 ```sh
-# Codex
+# Claude Code plans the work
+hivenote task build-api "POST /bookings with conflict checks"
+hivenote task review-api "Review the API once build-api is done"
+
+# Codex builds
 hivenote mark build-api doing
 hivenote append build-api "Endpoint works; adding the 409 path"
 hivenote mark build-api done
 
-# Claude Code, in another terminal
-hivenote wait build-api done      # returns the moment Codex finishes
+# Claude Code, meanwhile
+hivenote wait build-api done      # returns within seconds of Codex finishing
 hivenote mark review-api doing
 ```
 
@@ -71,14 +75,14 @@ You need Node 22.16 or newer.
 
 ```sh
 npm install -g hivenote
-hivenote ui
+hivenote ui          # keeps running in this terminal; use another one for the rest
 ```
 
 Then give your agents the skill. You can tell an agent to do it:
 
 > Install the hivenote npm package if it's missing, then copy the skill folder at `skills/hivenote` inside the package into your skills folder.
 
-Or copy it yourself:
+Or copy it yourself (macOS, Linux, WSL or Git Bash):
 
 ```sh
 mkdir -p ~/.claude/skills && cp -r "$(npm root -g)/hivenote/skills/hivenote" ~/.claude/skills/   # Claude Code
@@ -97,15 +101,15 @@ hivenote serve 0.0.0.0                  # listens on port 7391 and serves the da
 On each worker machine:
 
 ```sh
-hivenote connect                        # asks for the queen's URL and the token
+hivenote connect                        # asks for the queen's URL (http://ITS-ADDRESS:7391) and the token
 hivenote status                         # checks the queen answers and the token works
 ```
 
-Any address works: your LAN, Tailscale, or a tunnel. Across the open internet, put it behind HTTPS (a Cloudflare tunnel works), because plain HTTP sends the token unencrypted.
+Any address works: your LAN, Tailscale, or a tunnel. On a network you don't fully trust, and always across the internet, put it behind HTTPS (a Cloudflare tunnel works) or Tailscale, because plain HTTP sends the token unencrypted.
 
 ### Updating
 
-Run `npm install -g hivenote@latest` on every machine, the queen first. Your notes, tokens and connections stay as they are. Copy the skill again afterwards, so agents learn any new commands.
+Run `npm install -g hivenote@latest` on every machine, the queen first. Your notes, tokens and connections stay as they are. Restart `hivenote serve` on the queen so it runs the new version, and copy the skill again so agents learn any new commands.
 
 ## License
 

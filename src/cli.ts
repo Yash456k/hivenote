@@ -76,18 +76,29 @@ function fail(message: string): never {
 
 interface Words { words: string[]; agent?: string; json: boolean; help: boolean; version: boolean }
 
-/** Only --agent NAME and --json are options (plus help and version); every other word is text. */
+/** Commands whose words after the name are text to save, exactly as given. */
+const SAVES_TEXT = new Set(['add', 'task', 'edit', 'append', 'replace', 'describe']);
+
+/**
+ * Only --agent NAME and --json are options (plus help and version); every other word is text.
+ * The text a command must be given is never read as an option, so a note can say "--help".
+ * Help and version count only before the note's name.
+ */
 function parse(argv: string[]): Words {
   const result: Words = { words: [], json: false, help: false, version: false };
   for (let i = 0; i < argv.length; i++) {
     const word = argv[i]!;
-    if (word === '--agent') {
+    const [command] = result.words;
+    const given = result.words.length - 1;          // words after the command so far; 0 means the name comes next
+    const text = command !== undefined && SAVES_TEXT.has(command) && given >= 1 && given < NOTES[command]!.min;
+    if (text) result.words.push(word);
+    else if (word === '--agent') {
       const name = argv[++i];
       if (!name) fail('--agent needs a name: --agent builder-1');
       result.agent = name;
     } else if (word === '--json') result.json = true;
-    else if (word === '--help' || word === '-h') result.help = true;
-    else if (word === '--version' || word === '-v') result.version = true;
+    else if (given < 1 && (word === '--help' || word === '-h')) result.help = true;
+    else if (given < 1 && (word === '--version' || word === '-v')) result.version = true;
     else result.words.push(word);
   }
   return result;
@@ -193,9 +204,13 @@ const NOTES: Record<string, { usage: string; min: number; max: number; run: Run 
   history: {
     usage: 'history NAME', min: 1, max: 1,
     run: async ([note], store) => {
-      // The latest 100 changes, oldest first: the ones you'd want to undo.
-      const first = await store.call('history', { note, limit: 100 }) as { total: number };
-      return first.total <= 100 ? first : store.call('history', { note, limit: 100, offset: first.total - 100 });
+      // The latest 100 changes, oldest first: the ones you'd want to undo. One answer has a size
+      // limit, so when they don't all fit, keep reading on to the newest ones.
+      type Page = { events: unknown[]; total: number; offset: number; has_more: boolean };
+      let page = await store.call('history', { note, limit: 100 }) as Page;
+      if (page.total > 100) page = await store.call('history', { note, limit: 100, offset: page.total - 100 }) as Page;
+      while (page.has_more) page = await store.call('history', { note, limit: 100, offset: page.offset + page.events.length }) as Page;
+      return page;
     },
   },
   restore: {

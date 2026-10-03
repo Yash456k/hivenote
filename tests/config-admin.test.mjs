@@ -18,6 +18,8 @@ test('text from arguments and stdin is stored exactly as given and never run', a
   assert.equal((await cliJson([...args, 'replace', 'Native note', '-'], { env, input: 'stdin Résumé\n' })).note.content, 'stdin Résumé\n');
   assert.equal((await cliJson([...args, 'edit', 'Native note', 'Résumé', 'EDITED'], { env })).note.content, 'stdin EDITED\n');
   assert.equal((await cliJson([...args, 'append', 'Native note', '--not an option, just text'], { env })).note.rev, 3);
+  // Text that is exactly an option is still text.
+  assert.equal((await cliJson([...args, 'edit', 'Native note', 'EDITED', '--help'], { env })).note.content, 'stdin --help\n');
   // A file saved in an older Windows encoding keeps its accents.
   assert.equal((await cliJson([...args, 'add', 'Windows note', 'cp1252', '-'], { env, input: Buffer.from([0x43, 0x61, 0x66, 0xe9]) })).note.content, 'Café');
   for (const bad of [['list', 'extra'], ['add', 'only-a-name'], ['edit', 'Native note', 'missing new text'], ['mark', 'Native note', 'finished']]) {

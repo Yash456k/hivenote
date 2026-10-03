@@ -52,14 +52,15 @@ export function saveConfig(config: Config, path = configPath()): Config {
   return result;
 }
 /**
- * Flags win over saved config: --db on a connected machine runs that one command
- * locally, and --url on a local machine runs it remotely. Only --db and --url
- * together are a conflict.
+ * HIVENOTE_DB and HIVENOTE_URL win over saved config: the first runs that one command
+ * on a local file, the second against another hive. Both together are a conflict.
+ * The saved token belongs to the saved queen, so another URL never gets it.
  */
 export function resolveConfig(overrides: Config = {}, saved: Config = loadConfig()): Config {
   const base: Config = { ...saved };
+  const sameQueen = (a?: string, b?: string): boolean => a?.replace(/\/+$/u, '') === b?.replace(/\/+$/u, '');
   if (overrides.db) { delete base.url; delete base.tokenFile; }
-  if (overrides.url) delete base.db;
+  if (overrides.url) { delete base.db; if (!sameQueen(overrides.url, saved.url)) delete base.tokenFile; }
   return validate({ ...base, ...overrides });
 }
 export function readToken(config: Config, env: NodeJS.ProcessEnv = process.env): string {
@@ -73,6 +74,6 @@ export function readToken(config: Config, env: NodeJS.ProcessEnv = process.env):
       token = readFileSync(config.tokenFile, 'utf8').trim();
     } catch (error) { if (error instanceof HiveNoteError) throw error; throw new HiveNoteError('invalid_config', 'Cannot read token file'); }
   } else token = env.HIVENOTE_TOKEN ?? '';
-  if (!token || token.trim() !== token || /[\s\x00-\x1f\x7f]/u.test(token)) throw new HiveNoteError('invalid_config', 'Remote mode requires --token-file or HIVENOTE_TOKEN');
+  if (!token || token.trim() !== token || /[\s\x00-\x1f\x7f]/u.test(token)) throw new HiveNoteError('invalid_config', 'No token for this hive. Run hivenote connect, or set HIVENOTE_TOKEN');
   return token;
 }

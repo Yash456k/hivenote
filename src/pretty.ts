@@ -81,7 +81,7 @@ export function pretty(command: string, value: unknown): string {
       return pages.join(`\n\n${dim('─'.repeat(40))}\n\n`);
     }
     case 'wait': return `${dim(v.reason === 'status' ? 'Reached the status you waited for.' : 'It changed.')}\n\n${page(note!, (v.updates as Event[] | undefined) ?? [])}`;
-    case 'history': return history(v.events as Event[]);
+    case 'history': return `${Number(v.offset) > 0 ? dim(`(${String(v.offset)} earlier changes not shown)`) + '\n' : ''}${history(v.events as Event[])}`;
     case 'add': return `Added ${bold(note!.name)}`;
     case 'task': return `Added task ${bold(note!.name)}`;
     case 'edit': return `Edited ${bold(note!.name)}`;
@@ -96,7 +96,14 @@ export function pretty(command: string, value: unknown): string {
       : `Using this machine's own hive at ${String(v.db)}\n${dim(`${notes(v.notes)} · version ${String(v.version)}`)}`;
     case 'connect': return `Connected to the queen at ${String(v.connected)} (${notes(v.entries)}). Every hivenote command here now uses that hive.`;
     case 'disconnect': return 'Disconnected. This machine uses its own hive again. To shut the old token out too, run hivenote token remove LABEL on the queen.';
-    case 'serve': return `This machine is now the queen, sharing its hive at ${String(v.serving)}\n${dim(`Dashboard: ${String(v.dashboard)}`)}\n${dim('Let a machine in: hivenote token add LABEL here, then hivenote connect URL on that machine.')}`;
+    case 'serve': {
+      // 0.0.0.0 means "every address of this machine"; it is not an address another machine can use.
+      const everywhere = /\/\/(0\.0\.0\.0|\[::\])/u.test(String(v.serving));
+      const port = String(v.serving).split(':').pop()!;
+      const where = everywhere ? `on port ${port}, at every address this machine has` : `at ${String(v.serving)}`;
+      const url = everywhere ? `http://THIS-MACHINE'S-ADDRESS:${port}` : 'URL';
+      return `This machine is now the queen, sharing its hive ${where}\n${dim(`Dashboard: ${String(v.dashboard)}`)}\n${dim(`Let a machine in: hivenote token add LABEL here, then hivenote connect ${url} on that machine.`)}`;
+    }
     case 'ui': return `Dashboard: ${String(v.dashboard)}`;
     case 'backup': return `Backed up to ${String(v.path)}`;
     case 'token': {

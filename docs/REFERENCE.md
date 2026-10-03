@@ -18,13 +18,13 @@ hivenote history deploy-notes                   # the latest 100 changes, with v
 hivenote restore deploy-notes 3                 # undo: bring back version 3
 ```
 
-Every note has a **name** (unique among notes that aren't deleted, at most 256 bytes), a one-line **description** (at most 4 KB) and **text** (at most 512 KB). Notes are always named by their name. Inside, each note also has an ID, so a renamed note or a reused name never mixes up two histories; it shows up in JSON but no command asks for it.
+Every note has a **name** (unique among notes that aren't deleted, at most 256 bytes), a one-line **description** (at most 4 KB) and **text** (at most 512 KB). Notes are always named by their name. A name keeps one history: add a note under the name of a deleted one and it continues that note, so the old versions are still in `history`. Each note also has an ID inside; it shows up in JSON but no command asks for it.
 
-Any text argument can be `-`, which reads the text from stdin: a file piped in, or a heredoc. Text that is valid UTF-8 is stored exactly as given. A file saved in an older Windows encoding is read as Windows-1252, so letters like é survive.
+The description and text a command needs are saved exactly as written, even when they look like an option, so a note can say `--help`. Any text argument can be `-`, which reads the text from stdin: a file piped in, or a heredoc. Use that for the one case words can't express: an optional text (the third word of `add` or `task`) that is exactly `--json` or `--agent`. Text that is valid UTF-8 is stored exactly as given. A file saved in an older Windows encoding is read as Windows-1252, so letters like é survive.
 
-**Changes and undo.** Every change is kept in the note's history with who made it and when, including deletes, so nothing is ever lost: `restore` brings back any earlier version, and it finds a deleted note by its name. There is no version checking; the latest write wins. `edit` works on the current text and needs its old text to appear exactly once, so an edit based on outdated text is refused instead of landing in the wrong place. `append` adds a progress line without changing the note's text.
+**Changes and undo.** Every version of a note is kept in its history with who made it and when, including deletes: `restore` brings back any earlier version, and it finds a deleted note by its name. Progress lines are kept too, but they are not versions, so `restore` leaves them as they are. There is no version checking; the latest write wins. `edit` works on the current text and needs its old text to appear exactly once, so an edit based on outdated text is refused instead of landing in the wrong place. `append` adds a progress line without changing the note's text.
 
-**Search.** Plain words find notes containing all of them, so names like `api-decisions` and hosts like `stg.example.com` work as typed. Quotes, parentheses, `*` or `AND`/`OR`/`NOT` switch to SQLite full-text syntax, such as `"exact phrase"` or `deploy*`.
+**Search.** It covers each note's name, description, text and latest 100 progress lines. Plain words find notes containing all of them, so names like `api-decisions` and hosts like `stg.example.com` work as typed. Quotes, parentheses, `*` or `AND`/`OR`/`NOT` switch to SQLite full-text syntax, such as `"exact phrase"` or `deploy*`.
 
 **Size.** One answer is at most 5 MB. `read` names any note that didn't fit in `too_big` (read it on its own), and says when older progress was left out.
 
@@ -60,7 +60,7 @@ hivenote token remove laptop                    # that machine is shut out at it
 hivenote serve 0.0.0.0                          # or serve 0.0.0.0:8080, or serve :7391
 ```
 
-`serve` listens on 127.0.0.1:7391 unless told otherwise. The database stores only a hash of each token.
+`serve` listens on 127.0.0.1:7391 unless told otherwise. `0.0.0.0` means every address the queen has; workers connect to one of them, such as `http://192.168.1.20:7391`. The database stores only a hash of each token.
 
 On a worker:
 
@@ -71,9 +71,9 @@ hivenote status                                 # which hive, and whether it ans
 hivenote disconnect                             # back to this machine's own hive
 ```
 
-`connect` checks the URL and token before saving them, keeps the token in a private file (mode 600) in HiveNote's settings folder, and from then on every command on that machine, including agents', uses the queen. If the queen can't be reached, commands fail; they never quietly fall back to a local hive. `status` says which of these is wrong: the queen is down, the address isn't a queen, or the token was rejected.
+`connect` checks the URL and token before saving them, keeps the token in a private file (mode 600) in HiveNote's settings folder, and from then on every note and task command on that machine, including agents', uses the queen. `ui`, `serve`, `token` and `backup` only run on the machine that holds the hive; from a worker, open the queen's dashboard at her address instead. If the queen can't be reached, commands fail; they never quietly fall back to a local hive. `status` says which of these is wrong: the queen is down, the address isn't a queen, or the token was rejected.
 
-Any address works: your LAN, Tailscale, or a tunnel. The token travels with every request, so over plain `http://` anyone on the same network could read it; `connect` warns about that except for this machine and Tailscale addresses, which encrypt traffic themselves. Across the open internet, use HTTPS. For an existing Cloudflare tunnel, add a route to its configuration:
+Any address works: your LAN, Tailscale, or a tunnel. The token travels with every request, so over plain `http://` anyone on the same network could read it; `connect` warns about that except for this machine and Tailscale addresses, which encrypt traffic themselves. On a network you don't fully trust, and always across the internet, use HTTPS or Tailscale. For an existing Cloudflare tunnel, add a route to its configuration:
 
 ```yaml
 ingress:
@@ -100,7 +100,7 @@ Agents and scripts always get JSON: results on stdout, and errors on stderr as `
 |---|---|
 | `HIVENOTE_HOME` | One folder for both the settings and the database |
 | `HIVENOTE_DB` | Use this database file for this command |
-| `HIVENOTE_URL` + `HIVENOTE_TOKEN` | Use this queen for this command, without `connect` |
+| `HIVENOTE_URL` + `HIVENOTE_TOKEN` | Use this queen for this command, without `connect`. The token saved by `connect` is only ever sent to the queen it was saved for |
 
 Without them, the database lives at `~/.local/share/hivenote/data.db` on Linux, `~/Library/Application Support/hivenote` on macOS and `%LOCALAPPDATA%\hivenote` on Windows; settings live in `~/.config/hivenote`, the same macOS folder, and `%APPDATA%\hivenote`.
 

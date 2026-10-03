@@ -1,6 +1,6 @@
 {
   "name": "hivenote",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "One shared notebook for all your AI agents: notes, tasks and handoffs across Claude Code, Codex, Hermes and more, with a live dashboard.",
   "type": "module",
   "bin": {

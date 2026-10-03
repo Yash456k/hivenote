@@ -58,6 +58,17 @@ const fail = (fn, status, code) => assert.rejects(fn, error => {
   assert.equal(next.has_more, false);
 });
 
+test('a name reused after a delete keeps the old versions, and progress is searchable', async t => {
+  const { store } = await storeFor(t);
+  const first = await store.call('create', params(fixture({ name: 'deploy', content: 'old text' })));
+  await store.call('delete', params({ note: 'deploy' }));
+  const again = await store.call('create', params(fixture({ name: 'deploy', content: 'new text' })));
+  assert.equal(again.note.id, first.note.id);
+  assert.equal((await store.call('restore', params({ note: 'deploy', rev: 1 }))).note.content, 'old text');
+  await store.call('append', params({ note: 'deploy', body: 'staging returns zebra409' }));
+  assert.equal((await store.call('search', { query: 'zebra409' })).notes[0].name, 'deploy');
+});
+
 test('an edit whose old text does not match exactly once is refused and changes nothing', async t => {
   const { store } = await storeFor(t);
   const { note } = await store.call('create', fixture({ content: 'same same\nunique' }));

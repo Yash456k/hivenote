@@ -163,8 +163,13 @@ async function listAll() {
 async function loadContent() {
   const stale = state.entries.filter(entry => entry.kind === 'note' && state.full.get(entry.id)?.updated_at !== entry.updated_at).map(entry => entry.id);
   for (let i = 0; i < stale.length; i += 100) {
-    const { notes } = await call('read', { ids: stale.slice(i, i + 100) });
+    const { notes, too_big = [] } = await call('read', { ids: stale.slice(i, i + 100) });
     for (const note of notes) state.full.set(note.id, note);
+    // Very large notes don't all fit in one answer; read the ones left out one at a time.
+    for (const id of too_big) {
+      const { notes: [note] } = await call('read', { ids: [id] });
+      if (note) state.full.set(note.id, note);
+    }
   }
   const live = new Set(state.entries.map(entry => entry.id));
   for (const id of state.full.keys()) if (!live.has(id)) state.full.delete(id);

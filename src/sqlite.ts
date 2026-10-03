@@ -123,7 +123,15 @@ export class SqliteStore implements Store {
     const now = new Date().toISOString();
     if (method === 'create') {
       const note = createNote(p, who, now);
-      this.save(note, true);
+      // A name keeps one history: adding under a deleted note's name continues that note,
+      // so its old versions stay reachable with history and restore.
+      const live = this.get('SELECT 1 FROM notes WHERE name=? AND deleted_at IS NULL', note.name);
+      const gone = live ? undefined : this.get('SELECT * FROM notes WHERE name=? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC, rowid DESC LIMIT 1', note.name);
+      if (gone) {
+        const before = toNote(gone);
+        Object.assign(note, { id: before.id, rev: before.rev + 1, created_at: before.created_at });
+      }
+      this.save(note, !gone);
       return this.record(note, 'create', p, who, now);
     }
 
@@ -151,7 +159,9 @@ export class SqliteStore implements Store {
       note.last_attribution = who;
       this.save(note);
     }
-    return this.record(note, eventKind, p, who, now);
+    const receipt = this.record(note, eventKind, p, who, now);
+    if (method === 'append') this.index(note);
+    return receipt;
   }
 
   /** Replace exactly one occurrence of old_str. */
@@ -192,9 +202,15 @@ export class SqliteStore implements Store {
     } else {
       this.run(`UPDATE notes SET ${NOTE_COLUMNS.slice(1).map(column => `${column}=?`).join(',')} WHERE id=?`, ...values.slice(1), note.id);
     }
-    // The search index holds live notes only.
+    this.index(note);
+  }
+
+  /** The search index holds live notes only: their text, and their latest progress lines after it. */
+  private index(note: Note): void {
     this.run('DELETE FROM notes_fts WHERE id=?', note.id);
-    if (!note.deleted_at) this.run('INSERT INTO notes_fts(id,name,description,content) VALUES(?,?,?,?)', note.id, note.name, note.description, note.content);
+    if (note.deleted_at) return;
+    const progress = this.all("SELECT body FROM events WHERE note_id=? AND kind='append' ORDER BY seq DESC LIMIT 100", note.id).map(row => row.body as string).reverse();
+    this.run('INSERT INTO notes_fts(id,name,description,content) VALUES(?,?,?,?)', note.id, note.name, note.description, [note.content, ...progress].join('\n'));
   }
 
   /**

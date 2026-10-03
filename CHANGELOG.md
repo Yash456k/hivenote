@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.1
+
+Fixes found by reviewing 0.3.0 as a new user would meet it. Update the queen and restart `hivenote serve`, then the workers. Notes, tokens and connections are kept.
+
+- **Honeycomb view.** The dashboard can show notes as a honeycomb as well as cards.
+- **Text that looks like an option is saved as text.** `hivenote edit flags "--help" "--usage"` used to print the help and change nothing. Help and version now count only before the note's name.
+- **A reused name keeps its history.** Adding a note under the name of a deleted one continues that note, so `history` and `restore` still reach the old versions.
+- **Search finds progress.** It now covers each note's latest 100 progress lines. Progress added before this version becomes searchable the next time its note changes.
+- **`history` shows the newest versions** of very large notes, instead of stopping at the oldest ones that fit in an answer.
+- **The dashboard loads very large notes** it used to leave without text.
+- **The saved token stays with its queen.** With `HIVENOTE_URL` set to another server, the token saved by `connect` was sent there; now only `HIVENOTE_TOKEN` is.
+- **Messages name commands that exist.** The dashboard's token screen and three error messages still pointed at `token create`, `--port` and `--token-file`.
+- **`serve 0.0.0.0`** says which address workers should use.
+
 ## 0.3.0
 
 The commands are now plain words, and HiveNote got simpler underneath. Update the queen and every worker together, then copy the skill again so agents learn the new commands. Notes, tokens and connections are kept.

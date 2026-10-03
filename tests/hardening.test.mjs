@@ -40,3 +40,17 @@ test('a connected machine never falls back to a local hive: bad token file, brok
   assert.match(malformed.stderr,/config/iu);
   await assert.rejects(stat(join(home,'data.db')));
 });
+
+test('HIVENOTE_URL for another server never sends it the token saved for the queen', async t => {
+  const {dir}=await setup(t);
+  const home=join(dir,'home');
+  await mkdir(home,{recursive:true});
+  await writeFile(join(dir,'token.txt'),'saved-queen-token',{mode:0o600});
+  await writeFile(join(home,'config.json'),JSON.stringify({url:'http://127.0.0.1:1',tokenFile:join(dir,'token.txt')}));
+  const seen=[];
+  const other=http.createServer((request,response) => { seen.push(request.headers.authorization); response.writeHead(401).end('{}'); });
+  await new Promise(resolve => other.listen(0,'127.0.0.1',resolve));
+  t.after(() => closeServer(other));
+  await run(process.execPath,[cli,'list'],{env:{HIVENOTE_HOME:home,HIVENOTE_URL:serverUrl(other),HIVENOTE_TOKEN:'token-for-the-other'}});
+  assert.deepEqual([...new Set(seen)],['Bearer token-for-the-other']);
+});

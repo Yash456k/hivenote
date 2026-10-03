@@ -63,7 +63,7 @@ export async function connect(givenUrl: string | undefined): Promise<{ connected
     process.stderr.write('hivenote: warning: this address uses plain http, so the token can be read by anyone on the same network. Use https (for example a Cloudflare tunnel) or Tailscale.\n');
   }
   const token = await ask('Token: ', true);
-  if (!token) throw new HiveNoteError('invalid_args', 'A token is required. Create one on the hive machine: hivenote token create --device NAME');
+  if (!token) throw new HiveNoteError('invalid_args', 'A token is required. Create one on the queen: hivenote token add LABEL');
 
   // Check before saving, so a typo fails here rather than in the next agent command.
   const probe = new HttpStore(url, token, { retries: 0 });

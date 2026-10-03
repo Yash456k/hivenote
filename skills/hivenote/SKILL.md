@@ -41,7 +41,7 @@ hivenote replace hermes-server - <<'EOF'
 EOF
 ```
 
-If an `edit` fails because the old text no longer matches, another agent changed the note first: read it again and redo your edit. Every change stays in `hivenote history NAME`, and `hivenote restore NAME VERSION` brings back an earlier version.
+If an `edit` fails because the old text no longer matches, another agent changed the note first: read it again and redo your edit. Every version stays in `hivenote history NAME`, and `hivenote restore NAME VERSION` brings back an earlier one (progress lines are not undone by it).
 
 ## Tasks and handoffs
 

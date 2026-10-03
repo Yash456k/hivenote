@@ -71,7 +71,7 @@ export function storageError(error: unknown): never {
   if (error instanceof HiveNoteError) throw error;
   const message = error instanceof Error ? error.message : '';
   if (/UNIQUE constraint failed/iu.test(message)) throw new HiveNoteError('conflict', 'ID or live name already exists', 409);
-  if (/locked|busy/iu.test(message)) throw new HiveNoteError('busy', 'Database busy; retry with the same op_id', 503);
+  if (/locked|busy/iu.test(message)) throw new HiveNoteError('busy', 'The hive is busy with another write; try again', 503);
   throw new HiveNoteError('storage_error', 'Database operation failed', 500);
 }
 

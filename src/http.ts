@@ -125,7 +125,7 @@ export async function startServer(store: ServerStore, options: ServerOptions = {
   await new Promise<void>((resolve, reject) => {
     const onError = (error: NodeJS.ErrnoException): void => {
       reject(error.code === 'EADDRINUSE'
-        ? new HiveNoteError('port_in_use', `Port ${port} is already in use. If hivenote serve is running there, its dashboard is at http://127.0.0.1:${port}/; otherwise choose another with --port.`, 409)
+        ? new HiveNoteError('port_in_use', `Port ${port} is already in use. If hivenote serve is running there, its dashboard is at http://127.0.0.1:${port}/; otherwise pick another port, for example hivenote serve :7400.`, 409)
         : error);
     };
     server.once('error', onError);
