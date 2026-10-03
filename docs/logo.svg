@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 336" width="640" height="336">
+  <title>HiveNote: a honeycomb of notes, with the queen in the middle and worker bees flying in</title>
+  <defs><clipPath id="body"><ellipse cx="32" cy="38" rx="20" ry="17.5"/></clipPath></defs>
+  <!-- flight paths -->
+  <path d="M58 86 C120 60 170 96 214 128" fill="none" stroke="#f2a300" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="1 9"/>
+  <path d="M590 70 C540 52 480 84 432 122" fill="none" stroke="#f2a300" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="1 9"/>
+  <path d="M578 286 C530 300 470 268 428 232" fill="none" stroke="#f2a300" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="1 9"/>
+  <!-- the comb: each cell is a note -->
+  <polygon points="320.0,122.0 359.8,145.0 359.8,191.0 320.0,214.0 280.2,191.0 280.2,145.0" fill="#ffc83d" stroke="#f2a300" stroke-width="3" stroke-linejoin="round"/>
+  <polygon points="234.7,122.0 274.6,145.0 274.6,191.0 234.7,214.0 194.9,191.0 194.9,145.0" fill="#efe5fb" stroke="#f2a300" stroke-width="3" stroke-linejoin="round"/>
+  <rect x="217.7" y="155.0" width="34" height="5" rx="2.5" fill="#3a2a10" opacity="0.55"/>
+  <rect x="217.7" y="166.0" width="24" height="5" rx="2.5" fill="#3a2a10" opacity="0.22"/>
+  <rect x="217.7" y="177.0" width="30" height="5" rx="2.5" fill="#3a2a10" opacity="0.22"/>
+  <polygon points="405.3,122.0 445.1,145.0 445.1,191.0 405.3,214.0 365.4,191.0 365.4,145.0" fill="#dff0fb" stroke="#f2a300" stroke-width="3" stroke-linejoin="round"/>
+  <rect x="388.3" y="155.0" width="34" height="5" rx="2.5" fill="#3a2a10" opacity="0.55"/>
+  <rect x="388.3" y="166.0" width="24" height="5" rx="2.5" fill="#3a2a10" opacity="0.22"/>
+  <rect x="388.3" y="177.0" width="30" height="5" rx="2.5" fill="#3a2a10" opacity="0.22"/>
+  <polygon points="277.4,48.2 317.2,71.2 317.2,117.2 277.4,140.2 237.5,117.2 237.5,71.2" fill="#fff4c4" stroke="#f2a300" stroke-width="3" stroke-linejoin="round"/>
+  <rect x="260.4" y="81.2" width="34" height="5" rx="2.5" fill="#3a2a10" opacity="0.55"/>
+  <rect x="260.4" y="92.2" width="24" height="5" rx="2.5" fill="#3a2a10" opacity="0.22"/>
+  <rect x="260.4" y="103.2" width="30" height="5" rx="2.5" fill="#3a2a10" opacity="0.22"/>
+  <polygon points="362.6,48.2 402.5,71.2 402.5,117.2 362.6,140.2 322.8,117.2 322.8,71.2" fill="#ffe5d6" stroke="#f2a300" stroke-width="3" stroke-linejoin="round"/>
+  <rect x="345.6" y="81.2" width="34" height="5" rx="2.5" fill="#3a2a10" opacity="0.55"/>
+  <rect x="345.6" y="92.2" width="24" height="5" rx="2.5" fill="#3a2a10" opacity="0.22"/>
+  <rect x="345.6" y="103.2" width="30" height="5" rx="2.5" fill="#3a2a10" opacity="0.22"/>
+  <polygon points="277.4,195.8 317.2,218.8 317.2,264.8 277.4,287.8 237.5,264.8 237.5,218.8" fill="#e4f5dc" stroke="#f2a300" stroke-width="3" stroke-linejoin="round"/>
+  <rect x="260.4" y="228.8" width="34" height="5" rx="2.5" fill="#3a2a10" opacity="0.55"/>
+  <rect x="260.4" y="239.8" width="24" height="5" rx="2.5" fill="#3a2a10" opacity="0.22"/>
+  <rect x="260.4" y="250.8" width="30" height="5" rx="2.5" fill="#3a2a10" opacity="0.22"/>
+  <polygon points="362.6,195.8 402.5,218.8 402.5,264.8 362.6,287.8 322.8,264.8 322.8,218.8" fill="#fff4c4" stroke="#f2a300" stroke-width="3" stroke-linejoin="round"/>
+  <rect x="345.6" y="228.8" width="34" height="5" rx="2.5" fill="#3a2a10" opacity="0.55"/>
+  <rect x="345.6" y="239.8" width="24" height="5" rx="2.5" fill="#3a2a10" opacity="0.22"/>
+  <rect x="345.6" y="250.8" width="30" height="5" rx="2.5" fill="#3a2a10" opacity="0.22"/>
+  <!-- the queen, and workers on their way in -->
+  <g transform="translate(283.0 129.0) scale(1.156) rotate(0 32 36)">
+    <g transform="rotate(-22 25 21)"><ellipse cx="25" cy="15" rx="8" ry="12" fill="#ffffff" stroke="#bcd7ee" stroke-width="1.5"/></g>
+    <path d="M12.8 37 L6.5 39 L12.8 41.2 Z" fill="#3a2a10"/>
+    <ellipse cx="32" cy="38" rx="20" ry="17.5" fill="#ffcd3c"/>
+    <g clip-path="url(#body)"><rect x="18.5" y="18" width="4.5" height="42" rx="2" fill="#3a2a10"/><rect x="26.5" y="18" width="4.5" height="42" rx="2" fill="#3a2a10"/></g>
+    <ellipse cx="32" cy="38" rx="20" ry="17.5" fill="none" stroke="#3a2a10" stroke-width="2.5"/>
+    <g transform="rotate(16 36 21)"><ellipse cx="36" cy="14" rx="8.5" ry="12.5" fill="#ffffff" stroke="#bcd7ee" stroke-width="1.5"/></g>
+    <g transform="rotate(17 41 22)"><path d="M35 24.6 L34.4 16.8 L38.3 20.2 L41 15 L43.7 20.2 L47.6 16.8 L47 24.6 Z" fill="#ffb400" stroke="#3a2a10" stroke-width="1.8" stroke-linejoin="round"/><circle cx="41" cy="21.9" r="1.15" fill="#ff8fa3"/></g>
+    <circle cx="39.5" cy="35.5" r="2.6" fill="#3a2a10"/><circle cx="40.4" cy="34.5" r="0.85" fill="#fff"/>
+    <circle cx="46" cy="35.5" r="2.4" fill="#3a2a10"/><circle cx="46.8" cy="34.6" r="0.8" fill="#fff"/>
+    <path d="M40.6 40.8 q2.3 2.2 4.6 0" fill="none" stroke="#3a2a10" stroke-width="1.9" stroke-linecap="round"/>
+    <ellipse cx="36.8" cy="40.4" rx="2.2" ry="1.5" fill="#ff8fa3" opacity="0.7"/>
+    <ellipse cx="48.2" cy="40.4" rx="1.8" ry="1.4" fill="#ff8fa3" opacity="0.7"/>
+  </g>
+  <g transform="translate(35.0 55.0) scale(0.906) rotate(8 32 36)">
+    <g transform="rotate(-22 25 21)"><ellipse cx="25" cy="15" rx="8" ry="12" fill="#ffffff" stroke="#bcd7ee" stroke-width="1.5"/></g>
+    <path d="M12.8 37 L6.5 39 L12.8 41.2 Z" fill="#3a2a10"/>
+    <ellipse cx="32" cy="38" rx="20" ry="17.5" fill="#ffcd3c"/>
+    <g clip-path="url(#body)"><rect x="18.5" y="18" width="4.5" height="42" rx="2" fill="#3a2a10"/><rect x="26.5" y="18" width="4.5" height="42" rx="2" fill="#3a2a10"/></g>
+    <ellipse cx="32" cy="38" rx="20" ry="17.5" fill="none" stroke="#3a2a10" stroke-width="2.5"/>
+    <g transform="rotate(16 36 21)"><ellipse cx="36" cy="14" rx="8.5" ry="12.5" fill="#ffffff" stroke="#bcd7ee" stroke-width="1.5"/></g>
+    <path d="M41 24 C42 18.5 44.5 15 47.5 13.5" fill="none" stroke="#3a2a10" stroke-width="2" stroke-linecap="round"/><circle cx="48" cy="13" r="2.2" fill="#3a2a10"/>
+    <path d="M37 22.5 C37 17 38 13.5 40 11" fill="none" stroke="#3a2a10" stroke-width="2" stroke-linecap="round"/><circle cx="40.4" cy="10.5" r="2.2" fill="#3a2a10"/>
+    <circle cx="39.5" cy="35.5" r="2.6" fill="#3a2a10"/><circle cx="40.4" cy="34.5" r="0.85" fill="#fff"/>
+    <circle cx="46" cy="35.5" r="2.4" fill="#3a2a10"/><circle cx="46.8" cy="34.6" r="0.8" fill="#fff"/>
+    <path d="M40.6 40.8 q2.3 2.2 4.6 0" fill="none" stroke="#3a2a10" stroke-width="1.9" stroke-linecap="round"/>
+    <ellipse cx="36.8" cy="40.4" rx="2.2" ry="1.5" fill="#ff8fa3" opacity="0.7"/>
+    <ellipse cx="48.2" cy="40.4" rx="1.8" ry="1.4" fill="#ff8fa3" opacity="0.7"/>
+  </g>
+  <g transform="translate(611.0 41.0) scale(-0.844 0.844) rotate(8 32 36)">
+    <g transform="rotate(-22 25 21)"><ellipse cx="25" cy="15" rx="8" ry="12" fill="#ffffff" stroke="#bcd7ee" stroke-width="1.5"/></g>
+    <path d="M12.8 37 L6.5 39 L12.8 41.2 Z" fill="#3a2a10"/>
+    <ellipse cx="32" cy="38" rx="20" ry="17.5" fill="#ffcd3c"/>
+    <g clip-path="url(#body)"><rect x="18.5" y="18" width="4.5" height="42" rx="2" fill="#3a2a10"/><rect x="26.5" y="18" width="4.5" height="42" rx="2" fill="#3a2a10"/></g>
+    <ellipse cx="32" cy="38" rx="20" ry="17.5" fill="none" stroke="#3a2a10" stroke-width="2.5"/>
+    <g transform="rotate(16 36 21)"><ellipse cx="36" cy="14" rx="8.5" ry="12.5" fill="#ffffff" stroke="#bcd7ee" stroke-width="1.5"/></g>
+    <path d="M41 24 C42 18.5 44.5 15 47.5 13.5" fill="none" stroke="#3a2a10" stroke-width="2" stroke-linecap="round"/><circle cx="48" cy="13" r="2.2" fill="#3a2a10"/>
+    <path d="M37 22.5 C37 17 38 13.5 40 11" fill="none" stroke="#3a2a10" stroke-width="2" stroke-linecap="round"/><circle cx="40.4" cy="10.5" r="2.2" fill="#3a2a10"/>
+    <circle cx="39.5" cy="35.5" r="2.6" fill="#3a2a10"/><circle cx="40.4" cy="34.5" r="0.85" fill="#fff"/>
+    <circle cx="46" cy="35.5" r="2.4" fill="#3a2a10"/><circle cx="46.8" cy="34.6" r="0.8" fill="#fff"/>
+    <path d="M40.6 40.8 q2.3 2.2 4.6 0" fill="none" stroke="#3a2a10" stroke-width="1.9" stroke-linecap="round"/>
+    <ellipse cx="36.8" cy="40.4" rx="2.2" ry="1.5" fill="#ff8fa3" opacity="0.7"/>
+    <ellipse cx="48.2" cy="40.4" rx="1.8" ry="1.4" fill="#ff8fa3" opacity="0.7"/>
+  </g>
+  <g transform="translate(597.0 263.0) scale(-0.781 0.781) rotate(-8 32 36)">
+    <g transform="rotate(-22 25 21)"><ellipse cx="25" cy="15" rx="8" ry="12" fill="#ffffff" stroke="#bcd7ee" stroke-width="1.5"/></g>
+    <path d="M12.8 37 L6.5 39 L12.8 41.2 Z" fill="#3a2a10"/>
+    <ellipse cx="32" cy="38" rx="20" ry="17.5" fill="#ffcd3c"/>
+    <g clip-path="url(#body)"><rect x="18.5" y="18" width="4.5" height="42" rx="2" fill="#3a2a10"/><rect x="26.5" y="18" width="4.5" height="42" rx="2" fill="#3a2a10"/></g>
+    <ellipse cx="32" cy="38" rx="20" ry="17.5" fill="none" stroke="#3a2a10" stroke-width="2.5"/>
+    <g transform="rotate(16 36 21)"><ellipse cx="36" cy="14" rx="8.5" ry="12.5" fill="#ffffff" stroke="#bcd7ee" stroke-width="1.5"/></g>
+    <path d="M41 24 C42 18.5 44.5 15 47.5 13.5" fill="none" stroke="#3a2a10" stroke-width="2" stroke-linecap="round"/><circle cx="48" cy="13" r="2.2" fill="#3a2a10"/>
+    <path d="M37 22.5 C37 17 38 13.5 40 11" fill="none" stroke="#3a2a10" stroke-width="2" stroke-linecap="round"/><circle cx="40.4" cy="10.5" r="2.2" fill="#3a2a10"/>
+    <circle cx="39.5" cy="35.5" r="2.6" fill="#3a2a10"/><circle cx="40.4" cy="34.5" r="0.85" fill="#fff"/>
+    <circle cx="46" cy="35.5" r="2.4" fill="#3a2a10"/><circle cx="46.8" cy="34.6" r="0.8" fill="#fff"/>
+    <path d="M40.6 40.8 q2.3 2.2 4.6 0" fill="none" stroke="#3a2a10" stroke-width="1.9" stroke-linecap="round"/>
+    <ellipse cx="36.8" cy="40.4" rx="2.2" ry="1.5" fill="#ff8fa3" opacity="0.7"/>
+    <ellipse cx="48.2" cy="40.4" rx="1.8" ry="1.4" fill="#ff8fa3" opacity="0.7"/>
+  </g>
+</svg>

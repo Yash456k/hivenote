@@ -13,10 +13,10 @@
   <rect x="30" y="44" width="250" height="132" rx="16" fill="#fffdf6" stroke="#f0dca8"/>
   <text x="54" y="80" font-size="15" font-weight="700" fill="#3a2a10">Your laptop</text>
   <text x="54" y="101" font-size="12" fill="#806a45">a worker, after hivenote connect</text>
-  <rect x="54" y="122" width="108" height="30" rx="15" fill="#e3c1f5"/>
-  <text x="108" y="142" text-anchor="middle" font-size="12.5" font-weight="700" fill="#3a2a10">Claude Code</text>
-  <rect x="172" y="122" width="70" height="30" rx="15" fill="#a8d8f0"/>
-  <text x="207" y="142" text-anchor="middle" font-size="12.5" font-weight="700" fill="#3a2a10">Codex</text>
+  <rect x="54" y="122" width="84" height="30" rx="15" fill="#e3c1f5"/>
+  <text x="96" y="142" text-anchor="middle" font-size="12.5" font-weight="700" fill="#3a2a10">planner</text>
+  <rect x="148" y="122" width="80" height="30" rx="15" fill="#a8d8f0"/>
+  <text x="188" y="142" text-anchor="middle" font-size="12.5" font-weight="700" fill="#3a2a10">builder</text>
 
   <rect x="30" y="224" width="250" height="132" rx="16" fill="#fffdf6" stroke="#f0dca8"/>
   <text x="54" y="260" font-size="15" font-weight="700" fill="#3a2a10">Any other machine</text>
@@ -54,7 +54,7 @@
   <text x="560" y="204" text-anchor="middle" font-size="12" fill="#3a2a10">one SQLite file</text>
 
   <rect x="516" y="318" width="88" height="30" rx="15" fill="#b5e3a0"/>
-  <text x="560" y="338" text-anchor="middle" font-size="12.5" font-weight="700" fill="#3a2a10">Hermes</text>
+  <text x="560" y="338" text-anchor="middle" font-size="12.5" font-weight="700" fill="#3a2a10">reviewer</text>
   <path d="M560 314 L560 274" stroke="#f2a300" stroke-width="1.8" fill="none" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
   <text x="612" y="338" font-size="11.5" fill="#806a45">on the queen</text>
 

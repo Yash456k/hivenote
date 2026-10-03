@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/honeycomb.webp" alt="The HiveNote dashboard: six notes as honeycomb cells, a task board with To do, Doing and Done, and a live feed of what each agent did" width="100%">
+<img src="docs/logo.svg" alt="A honeycomb of notes with the queen bee in the middle and worker bees flying in" width="460">
 
 <h1>HiveNote</h1>
 
@@ -14,44 +14,38 @@
 
 <br>
 
-Claude Code, Codex, Hermes and any other agent that can run a command keep their notes in one hive. Each session normally starts without knowing what the last one figured out, and the one carrying it across is you, copying from one agent and pasting into the next. With HiveNote an agent writes it down once and the others read it.
+Any agent that can run a shell command can use it, whichever tool it runs in and whichever machine it is on. One agent writes down what it learned, the next one reads it, and when one finishes a task the agent waiting for it carries on.
 
-## Notes
+## How it works
 
-Every note has a name and a one-line description, so an agent lists the hive, opens only the notes that matter for its task, and updates them when it learns something new. It's the same way agents already pick skills. What goes in is whatever the next session would otherwise have to work out again: decisions and why they were made, where things live, what broke last time.
+Every note has a name and a one-line description, so an agent lists the hive, opens only the notes that matter for its task, and updates them when it learns something new. It's the same way agents already pick skills. Agents use it through the `hivenote` command and a short [skill file](skills/hivenote/SKILL.md) that teaches them when to read and save. Every version of a note is kept, so `hivenote restore` brings back any earlier one.
 
-Agents use it through the `hivenote` command and a short [skill file](skills/hivenote/SKILL.md) that teaches them when to read and save. Every version of a note is kept in its history, so `hivenote restore` brings back any earlier one.
-
-## Tasks
-
-A note can also be a task. An agent marks it `doing`, which puts its name and the time on the task for everyone to see, appends progress as it goes, and marks it `done`. Another agent can sit in `hivenote wait` and carry on within seconds of the task finishing, so the handoff happens without you in the middle.
+A note can also be a task. An agent marks it `doing`, which puts its name and the time on the task for everyone to see, appends progress as it goes, and marks it `done`. Another agent can sit in `hivenote wait` and carry on within seconds of the task finishing.
 
 ```sh
-# Claude Code plans the work
+# one agent plans the work
 hivenote task build-api "POST /bookings with conflict checks"
 hivenote task review-api "Review the API once build-api is done"
 
-# Codex builds
+# a second one builds
 hivenote mark build-api doing
 hivenote append build-api "Endpoint works; adding the 409 path"
 hivenote mark build-api done
 
-# Claude Code, meanwhile
-hivenote wait build-api done      # returns within seconds of Codex finishing
+# a third one, meanwhile
+hivenote wait build-api done      # returns within seconds of the build finishing
 hivenote mark review-api doing
 ```
+
+On one machine there is nothing to run: the hive is a single SQLite file on your disk. To share it, one machine becomes the queen with `hivenote serve` and the others join as workers with `hivenote connect`. Every agent on all of them then works from the same notes.
+
+![One queen keeps the hive in a single SQLite file; agents on other machines read and write it through her, each with a token, and the dashboard shows it live](docs/hive.svg)
 
 ## The dashboard
 
 `hivenote ui` opens the dashboard in your browser. Notes show as cards or as a honeycomb and can be dragged around, the task board follows each task from To do to Done, and the Buzz feed lists which agent did what. It refreshes every two seconds, so you can watch the agents work.
 
-![The same dashboard in the cards view, where each note also shows its text](docs/dashboard.webp)
-
-## One queen, many workers
-
-On one machine there is nothing to run: the hive is a single SQLite file on your disk. To share it, one machine becomes the queen with `hivenote serve` and the others join as workers with `hivenote connect`. Every agent on all of them then works from the same notes.
-
-![One queen keeps the hive in a single SQLite file; agents on other machines read and write it through her, each with a token, and the dashboard shows it live](docs/hive.svg)
+![The HiveNote dashboard: six notes as honeycomb cells, a task board with To do, Doing and Done, and a live feed of what each agent did](docs/honeycomb.webp)
 
 ## Commands
 
@@ -82,7 +76,7 @@ Then give your agents the skill. You can tell an agent to do it:
 
 > Install the hivenote npm package if it's missing, then copy the skill folder at `skills/hivenote` inside the package into your skills folder.
 
-Or copy it yourself (macOS, Linux, WSL or Git Bash):
+Or copy it yourself into the folder your agent reads skills from (macOS, Linux, WSL or Git Bash). For example:
 
 ```sh
 mkdir -p ~/.claude/skills && cp -r "$(npm root -g)/hivenote/skills/hivenote" ~/.claude/skills/   # Claude Code
