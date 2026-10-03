@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 400" width="1000" height="400" font-family="'Nunito', ui-rounded, 'Helvetica Neue', Helvetica, Arial, sans-serif">
+  <title>One queen keeps the hive; agents on every other machine read and write it through her</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#f2a300"/>
+    </marker>
+    <clipPath id="body"><ellipse cx="32" cy="38" rx="20" ry="17.5"/></clipPath>
+  </defs>
+
+  <rect x="0" y="0" width="1000" height="400" rx="22" fill="#fff8e7"/>
+
+  <!-- workers -->
+  <rect x="30" y="44" width="250" height="132" rx="16" fill="#fffdf6" stroke="#f0dca8"/>
+  <text x="54" y="80" font-size="15" font-weight="700" fill="#3a2a10">Your laptop</text>
+  <text x="54" y="101" font-size="12" fill="#806a45">a worker, after hivenote connect</text>
+  <rect x="54" y="122" width="108" height="30" rx="15" fill="#e3c1f5"/>
+  <text x="108" y="142" text-anchor="middle" font-size="12.5" font-weight="700" fill="#3a2a10">Claude Code</text>
+  <rect x="172" y="122" width="70" height="30" rx="15" fill="#a8d8f0"/>
+  <text x="207" y="142" text-anchor="middle" font-size="12.5" font-weight="700" fill="#3a2a10">Codex</text>
+
+  <rect x="30" y="224" width="250" height="132" rx="16" fill="#fffdf6" stroke="#f0dca8"/>
+  <text x="54" y="260" font-size="15" font-weight="700" fill="#3a2a10">Any other machine</text>
+  <text x="54" y="281" font-size="12" fill="#806a45">another worker, same command</text>
+  <rect x="54" y="302" width="172" height="30" rx="15" fill="#fff4c4" stroke="#f0dca8"/>
+  <text x="140" y="322" text-anchor="middle" font-size="12.5" font-weight="700" fill="#3a2a10">any agent with a shell</text>
+
+  <!-- what travels -->
+  <path d="M284 110 C350 110 366 168 426 168" stroke="#f2a300" stroke-width="1.8" fill="none" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <path d="M284 290 C350 290 366 232 426 232" stroke="#f2a300" stroke-width="1.8" fill="none" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <text x="352" y="196" text-anchor="middle" font-size="11.5" font-weight="700" fill="#806a45">notes and tasks,</text>
+  <text x="352" y="212" text-anchor="middle" font-size="11.5" font-weight="700" fill="#806a45">each with a token</text>
+
+  <!-- the queen -->
+  <rect x="430" y="30" width="260" height="340" rx="18" fill="#fff4c4" stroke="#f2a300" stroke-width="1.5"/>
+  <g transform="translate(452 38) scale(0.78)">
+    <g transform="rotate(-22 25 21)"><ellipse cx="25" cy="15" rx="8" ry="12" fill="#ffffff" stroke="#bcd7ee" stroke-width="1.5"/></g>
+    <path d="M12.8 37 L6.5 39 L12.8 41.2 Z" fill="#3a2a10"/>
+    <ellipse cx="32" cy="38" rx="20" ry="17.5" fill="#ffcd3c"/>
+    <g clip-path="url(#body)"><rect x="18.5" y="18" width="4.5" height="42" rx="2" fill="#3a2a10"/><rect x="26.5" y="18" width="4.5" height="42" rx="2" fill="#3a2a10"/></g>
+    <ellipse cx="32" cy="38" rx="20" ry="17.5" fill="none" stroke="#3a2a10" stroke-width="2.5"/>
+    <g transform="rotate(16 36 21)"><ellipse cx="36" cy="14" rx="8.5" ry="12.5" fill="#ffffff" stroke="#bcd7ee" stroke-width="1.5"/></g>
+    <circle cx="39.5" cy="35.5" r="2.6" fill="#3a2a10"/><circle cx="40.4" cy="34.5" r="0.85" fill="#fff"/>
+    <circle cx="46" cy="35.5" r="2.4" fill="#3a2a10"/><circle cx="46.8" cy="34.6" r="0.8" fill="#fff"/>
+    <path d="M40.6 40.8 q2.3 2.2 4.6 0" fill="none" stroke="#3a2a10" stroke-width="1.9" stroke-linecap="round"/>
+    <ellipse cx="36.8" cy="40.4" rx="2.2" ry="1.5" fill="#ff8fa3" opacity="0.7"/>
+    <ellipse cx="48.2" cy="40.4" rx="1.8" ry="1.4" fill="#ff8fa3" opacity="0.7"/>
+    <g transform="rotate(17 41 22)"><path d="M35 24.6 L34.4 16.8 L38.3 20.2 L41 15 L43.7 20.2 L47.6 16.8 L47 24.6 Z" fill="#ffb400" stroke="#3a2a10" stroke-width="1.8" stroke-linejoin="round"/><circle cx="41" cy="21.9" r="1.15" fill="#ff8fa3"/></g>
+  </g>
+  <text x="510" y="66" font-size="15" font-weight="700" fill="#3a2a10">The queen</text>
+  <text x="510" y="86" font-size="12" fill="#806a45">runs hivenote serve</text>
+
+  <path d="M560 108 L630 148 L630 228 L560 268 L490 228 L490 148 Z" fill="#ffc83d" stroke="#f2a300" stroke-width="2" stroke-linejoin="round"/>
+  <text x="560" y="184" text-anchor="middle" font-size="17" font-weight="800" fill="#3a2a10">The hive</text>
+  <text x="560" y="204" text-anchor="middle" font-size="12" fill="#3a2a10">one SQLite file</text>
+
+  <rect x="516" y="318" width="88" height="30" rx="15" fill="#b5e3a0"/>
+  <text x="560" y="338" text-anchor="middle" font-size="12.5" font-weight="700" fill="#3a2a10">Hermes</text>
+  <path d="M560 314 L560 274" stroke="#f2a300" stroke-width="1.8" fill="none" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <text x="612" y="338" font-size="11.5" fill="#806a45">on the queen</text>
+
+  <!-- the dashboard -->
+  <path d="M694 200 L776 200" stroke="#f2a300" stroke-width="1.8" fill="none" marker-end="url(#arrow)"/>
+  <rect x="780" y="134" width="190" height="132" rx="16" fill="#fffdf6" stroke="#f0dca8"/>
+  <text x="875" y="184" text-anchor="middle" font-size="15" font-weight="700" fill="#3a2a10">The dashboard</text>
+  <text x="875" y="206" text-anchor="middle" font-size="12" fill="#806a45">in your browser, where you</text>
+  <text x="875" y="223" text-anchor="middle" font-size="12" fill="#806a45">watch it happen live</text>
+</svg>
