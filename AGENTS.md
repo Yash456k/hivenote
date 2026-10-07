@@ -9,6 +9,16 @@ npm test                      # builds first
 node scripts/pack-smoke.mjs   # installs the real tarball and checks the CLI and MCP
 ```
 
+## Releasing
+
+Only when Yash says to release a version.
+
+1. `package.json` (and `package-lock.json`) carry the version, and `CHANGELOG.md` has a `## X.Y.Z` section for it.
+2. The work is merged into `main` and CI is green there.
+3. `git tag vX.Y.Z` on that commit of `main`, then `git push origin vX.Y.Z`.
+
+The tag starts `.github/workflows/release.yml`, which runs the checks again, publishes to npm and makes the GitHub release from the changelog section. npm trusts that workflow by name (trusted publishing, set up on npmjs.com under the package's settings), so there is no token, and nobody runs `npm publish` by hand.
+
 ## Tests
 
 - Test the main behavior users rely on, not every small detail. A new feature gets one or two tests of its main path, and a fixed bug gets one test that reproduces it.
