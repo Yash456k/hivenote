@@ -13,6 +13,7 @@ async function exercise(args, env) {
   const created = await hive('add', name, 'A note', 'alpha unique beta');
   assert.equal(created.note.rev, 1);
   assert.equal((await hive('list')).total, 1);
+  assert.equal((await hive('ls')).total, 1, 'shell habits are understood');
   assert.equal((await hive('read', name)).notes[0].content, 'alpha unique beta');
   assert.equal((await hive('search', 'unique')).total, 1);
   assert.equal((await hive('edit', name, 'unique', 'edited')).note.content, 'alpha edited beta');

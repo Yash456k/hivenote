@@ -28,6 +28,8 @@ The description and text a command needs are saved exactly as written, even when
 
 **Size.** One answer is at most 5 MB. `read` names any note that didn't fit in `too_big` (read it on its own), and says when older progress was left out.
 
+Shell habits are understood: `ls` is `list`, `cat` is `read`, `grep` and `find` are `search`, `rm` is `delete` and `log` is `history`.
+
 ## Tasks
 
 ```sh

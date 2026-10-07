@@ -46,6 +46,7 @@ Machines
   hivenote backup FILE | hivenote mcp
 
 Any text can be - to read it from a file or typed input: hivenote replace notes - < notes.md
+Shell habits work too: ls (list), cat (read), grep and find (search), rm (delete), log (history)
 --agent NAME  label your changes when several agents share one machine
 --json        print JSON (agents and scripts always get JSON)
 
@@ -381,6 +382,9 @@ async function runOnThisMachine(command: string, words: string[], config: Config
 
 // ---------- Unknown words ----------
 
+/** Words people type out of shell habit, and the command each one means. */
+const ALIASES: Record<string, string> = { ls: 'list', cat: 'read', grep: 'search', find: 'search', rm: 'delete', log: 'history' };
+
 const MACHINE = ['serve', 'ui', 'connect', 'disconnect', 'status', 'token', 'backup', 'mcp', 'version', 'help'];
 /** Commands from before 0.3, so old habits and old skill files get pointed the right way. */
 const RENAMED: Record<string, string> = {
@@ -419,7 +423,8 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   const { words, agent, json, help, version } = parse(argv);
   // Readable output only for a person typing in a terminal: never for a detected agent or --agent.
   view.human = process.stdout.isTTY === true && !json && agent === undefined && detectAgent() === undefined;
-  const command = words.shift();
+  const typed = words.shift();
+  const command = typed === undefined ? undefined : ALIASES[typed] ?? typed;
   view.command = command ?? '';
   if (version || command === 'version') { view.command = 'version'; output({ version: VERSION }); return; }
   if (help || command === undefined || command === 'help') { process.stdout.write(HELP); return; }
