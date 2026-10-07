@@ -19,6 +19,14 @@ Only when Yash says to release a version.
 
 The tag starts `.github/workflows/release.yml`, which runs the checks again, publishes to npm and makes the GitHub release from the changelog section. npm trusts that workflow by name (trusted publishing, set up on npmjs.com under the package's settings), so there is no token, and nobody runs `npm publish` by hand.
 
+## The cloudflared that `serve public` downloads
+
+`src/tunnel.ts` names one cloudflared release and the SHA-256 of its program for each of eight kinds of machine. A download is run only if it matches. To move to a newer release:
+
+1. Open that release on github.com/cloudflare/cloudflared and copy the checksums from its notes for `linux-amd64`, `linux-arm64`, `linux-arm`, `linux-386`, `darwin-amd64`, `darwin-arm64`, `windows-amd64` and `windows-386`.
+2. For the two macOS entries the notes give the checksum of the program inside the `.tgz`, not of the `.tgz`. That is the one to use, because HiveNote checks the program it is about to run.
+3. Change the version and all eight checksums together, then run `hivenote serve public` once on a machine with no cloudflared installed to see the download pass its check.
+
 ## Tests
 
 - Test the main behavior users rely on, not every small detail. A new feature gets one or two tests of its main path, and a fixed bug gets one test that reproduces it.

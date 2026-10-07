@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { mkdirSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Server } from 'node:http';
 import { HiveNoteError, VERSION, type Actor, type Method, type Params, type Store } from './contract.js';
@@ -274,11 +274,44 @@ function address(word: string | undefined, fallbackHost: string): { host: string
   return fail('Give an address like 0.0.0.0, :8080 or 0.0.0.0:7391');
 }
 
+/**
+ * `serve public` makes a hive reachable from the whole internet, so a person has to be told
+ * what that means and agree, once per machine. An agent or a service cannot agree for them:
+ * without a terminal the command refuses until someone has.
+ */
+async function agreeToPublic(store: LocalStore): Promise<void> {
+  const tokens = (store.tokenList() as { device: string; revoked: number }[]).filter(row => !row.revoked).map(row => row.device);
+  const who = tokens.length ? `${tokens.length === 1 ? 'One token gets' : `${tokens.length} tokens get`} in: ${tokens.join(', ')}` : 'No token gets in yet; add one with hivenote token add LABEL';
+  const agreed = join(configDirectory(), 'public-agreed');
+  if (existsSync(agreed)) {
+    process.stderr.write(`hivenote: this hive is on the internet while this command runs. ${who}.\n`);
+    return;
+  }
+  if (!process.stdin.isTTY) {
+    throw new HiveNoteError('consent_needed', 'hivenote serve public puts this hive on the internet, so a person has to agree to that once on this machine. Run hivenote serve public in a terminal here first.', 403);
+  }
+  process.stderr.write(`
+hivenote serve public puts this hive on the internet.
+
+  - Anyone who has the address can reach it. Reading or writing a note still needs a token.
+  - ${who}. hivenote token remove LABEL shuts one out.
+  - The address is random and is not listed anywhere. It works until this command stops.
+  - The traffic passes through Cloudflare, which can read it. Don't keep secrets in a hive you make public.
+
+`);
+  const { ask } = await import('./connect.js');
+  if (!/^(y|yes)$/iu.test(await ask('Put this hive on the internet? [y/N] ', false))) throw new HiveNoteError('cancelled', 'Not started. The hive stays on this machine only.');
+  mkdirSync(configDirectory(), { recursive: true, mode: 0o700 });
+  writeFileSync(agreed, `${new Date().toISOString()}\n`, { mode: 0o600 });
+  process.stderr.write('hivenote: noted; this machine will not ask again.\n');
+}
+
 async function runServer(store: LocalStore, command: 'serve' | 'ui', words: string[]): Promise<void> {
   // serve public: the tunnel reaches the hive on this machine, so only the port can be chosen.
   const tunnelled = command === 'serve' && words[0] === 'public';
   if (tunnelled) words = words.slice(1);
   if (words.length > 1 || (tunnelled && words[0] !== undefined && !/^:\d+$/u.test(words[0]))) fail(command === 'serve' ? 'Usage: hivenote serve [HOST][:PORT] | hivenote serve public [:PORT]' : 'Usage: hivenote ui [PORT]');
+  if (tunnelled) await agreeToPublic(store);
   const { startServer } = await import('./http.js');
   const { host, port: chosen } = address(words[0], '127.0.0.1');
   // ui only shows this machine's hive, so it takes the next free port; serve keeps the one workers use.
@@ -387,7 +420,10 @@ async function runMcp(config: Config): Promise<void> {
 /** Commands that need the hive's file on this machine. They keep running (serve, ui) or finish. */
 async function runOnThisMachine(command: string, words: string[], config: Config): Promise<void> {
   // A server must keep answering everyone, so it waits only briefly for another process's write.
-  if (command === 'serve' || command === 'ui') (await import('./database.js')).lockWait.ms = 200;
+  if (command === 'serve' || command === 'ui') {
+    quietSqliteWarning();
+    (await import('./database.js')).lockWait.ms = 200;
+  }
   const store = await openLocalStore(config);
   if (command === 'serve' || command === 'ui') {
     try { await runServer(store, command, words); } catch (error) { store.close(); throw error; }

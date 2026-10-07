@@ -19,7 +19,7 @@ import { configDirectory, loadConfig, readToken, saveConfig } from './config.js'
 export interface Prompt { tty: boolean; ask(question: string, hidden: boolean): Promise<string> }
 
 /** Prompts go to stderr so stdout stays JSON. */
-function ask(question: string, hidden: boolean): Promise<string> {
+export function ask(question: string, hidden: boolean): Promise<string> {
   const input = process.stdin;
   if (!input.isTTY) {
     // Piped: `echo $TOKEN | hivenote connect URL`.

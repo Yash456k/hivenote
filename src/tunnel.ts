@@ -1,5 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { join } from 'node:path';
 import { dataDirectory } from './config.js';
@@ -22,23 +23,85 @@ export interface TunnelOptions {
   say: (message: string) => void;
 }
 
-const RELEASES = 'https://github.com/cloudflare/cloudflared/releases/latest/download/';
+/**
+ * The cloudflared release HiveNote downloads, and the SHA-256 of the program for each kind
+ * of machine, copied from that release's notes on github.com/cloudflare/cloudflared.
+ * A download is only ever run if it is exactly this file. To move to a newer release,
+ * change the version and all eight checksums together (AGENTS.md says how).
+ */
+export const CLOUDFLARED = {
+  version: '2026.10.0',
+  releases: 'https://github.com/cloudflare/cloudflared/releases/download/',
+  sha256: {
+    'linux-amd64': 'd33ff2d14475178d2012c2c56beba87389ac5ded27649519f198a7d3134a99db',
+    'linux-arm64': 'e6422b9d4f72d3194bc5a38676f13667c06666523217b842a877d72a80b5ac08',
+    'linux-arm': '1dbe8e4ec17e74bb7f49cf91db6a4903bd0f9fe41984556c7503e40b765fd099',
+    'linux-386': 'f6fbd789e6ce9c824d4d560cbbfad2753d55ce398ece16b4c9fbf17271dceab3',
+    'darwin-amd64': '0560c9ab7281ac3f746055323623ed23bc0405b6dab9400474020cba33a978da',
+    'darwin-arm64': '72edfd3eea463aef4d5cb89e2e209cecb048cc756c2b01915de2e0ad7cb39830',
+    'windows-amd64': '86aee4017b26625cee8484c113558f48effa4cd47f7aa05fcf425604e5d2b23c',
+    'windows-386': '0630a8779e9823a1a3b091698b8e71874e0f7b205559219f52fdd301466b5546',
+  } as Record<string, string>,
+};
 const INSTALL_URL = 'https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/';
 const INSTALL = `Install cloudflared yourself (${INSTALL_URL}) and run this again.`;
 
-/** The file Cloudflare publishes for this kind of machine. */
-function asset(): string | undefined {
+/** This kind of machine as Cloudflare names it, such as linux-amd64. */
+function machine(): string {
+  const system = ({ linux: 'linux', darwin: 'darwin', win32: 'windows' } as Record<string, string>)[process.platform];
   const arch = ({ x64: 'amd64', arm64: 'arm64', arm: 'arm', ia32: '386' } as Record<string, string>)[process.arch];
-  if (!arch) return undefined;
-  if (process.platform === 'linux') return `cloudflared-linux-${arch}`;
-  if (process.platform === 'darwin' && (arch === 'amd64' || arch === 'arm64')) return `cloudflared-darwin-${arch}.tgz`;
-  if (process.platform === 'win32' && (arch === 'amd64' || arch === '386')) return `cloudflared-windows-${arch}.exe`;
-  return undefined;
+  return `${system}-${arch}`;
+}
+
+const checksum = (file: string): string => createHash('sha256').update(readFileSync(file)).digest('hex');
+
+/**
+ * Download HiveNote's own copy of cloudflared into a folder, and keep it only if it is the
+ * exact file expected. Anything else is deleted without being run.
+ */
+export async function download(directory: string, say: TunnelOptions['say'], releases = CLOUDFLARED.releases): Promise<string> {
+  const kind = machine();
+  const expected = CLOUDFLARED.sha256[kind];
+  if (!expected) throw new HiveNoteError('tunnel_unavailable', `Cloudflare publishes no cloudflared for this machine (${process.platform} ${process.arch}). ${INSTALL}`);
+  const kept = join(directory, `cloudflared-${CLOUDFLARED.version}${process.platform === 'win32' ? '.exe' : ''}`);
+  // The copy from an earlier run is checked again each time: it is about to be run.
+  if (existsSync(kept) && checksum(kept) === expected) return kept;
+
+  // macOS gets an archive holding the one program; the others get the program itself.
+  const archive = process.platform === 'darwin';
+  const url = `${releases}${CLOUDFLARED.version}/cloudflared-${kind}${archive ? '.tgz' : process.platform === 'win32' ? '.exe' : ''}`;
+  say(`cloudflared is not installed; downloading version ${CLOUDFLARED.version} once from ${url} (about 40 MB)`);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const work = mkdtempSync(join(directory, 'cloudflared-download-'));
+  try {
+    let program = join(work, 'cloudflared');
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(300000) });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      writeFileSync(archive ? `${program}.tgz` : program, Buffer.from(await response.arrayBuffer()));
+      // tar is part of macOS.
+      if (archive && spawnSync('tar', ['-xzf', `${program}.tgz`, '-C', work, 'cloudflared'], { stdio: 'ignore' }).status !== 0) throw new Error('could not unpack the download');
+    } catch (error) {
+      const cause = error instanceof Error ? ((error.cause as Error | undefined)?.message ?? error.message) : '';
+      throw new HiveNoteError('tunnel_unavailable', `Could not download cloudflared${cause ? ` (${cause.slice(0, 200)})` : ''}. Run this again, or install cloudflared yourself: ${INSTALL_URL}`, 503);
+    }
+    if (checksum(program) !== expected) {
+      throw new HiveNoteError('tunnel_unavailable', `The file downloaded from ${url} is not the cloudflared ${CLOUDFLARED.version} that HiveNote expects (its checksum differs), so it was deleted without being run. ${INSTALL}`, 502);
+    }
+    if (process.platform !== 'win32') chmodSync(program, 0o755);
+    rmSync(kept, { force: true });
+    renameSync(program, kept);
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+  say(`checked and saved to ${kept}`);
+  return kept;
 }
 
 /**
  * HIVENOTE_CLOUDFLARED, then a cloudflared already installed, then the copy HiveNote keeps
- * beside the hive, downloading that copy from Cloudflare's releases the first time.
+ * beside the hive. The first two are yours and are run as they are; HiveNote's own copy is
+ * a pinned release, checked against its checksum.
  */
 async function cloudflared(say: TunnelOptions['say']): Promise<string> {
   const chosen = process.env.HIVENOTE_CLOUDFLARED;
@@ -47,33 +110,7 @@ async function cloudflared(say: TunnelOptions['say']): Promise<string> {
     return chosen;
   }
   if (spawnSync('cloudflared', ['--version'], { stdio: 'ignore' }).status === 0) return 'cloudflared';
-  const directory = dataDirectory();
-  const kept = join(directory, process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared');
-  if (existsSync(kept)) return kept;
-
-  const name = asset();
-  if (!name) throw new HiveNoteError('tunnel_unavailable', `Cloudflare publishes no cloudflared for this machine (${process.platform} ${process.arch}). ${INSTALL}`);
-  say(`cloudflared is not installed; downloading it once from ${RELEASES}${name} (about 40 MB)`);
-  const temporary = `${kept}.${process.pid}.tmp`;
-  try {
-    const response = await fetch(RELEASES + name, { signal: AbortSignal.timeout(300000) });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    writeFileSync(temporary, Buffer.from(await response.arrayBuffer()), { mode: 0o755 });
-    if (name.endsWith('.tgz')) {
-      // macOS ships it as an archive holding the one program; tar is part of the system.
-      const unpacked = spawnSync('tar', ['-xzf', temporary, '-C', directory, 'cloudflared'], { stdio: 'ignore' });
-      if (unpacked.status !== 0) throw new Error('could not unpack the download');
-      rmSync(temporary, { force: true });
-    } else renameSync(temporary, kept);
-    if (process.platform !== 'win32') chmodSync(kept, 0o755);
-  } catch (error) {
-    rmSync(temporary, { force: true });
-    const cause = error instanceof Error ? ((error.cause as Error | undefined)?.message ?? error.message) : '';
-    throw new HiveNoteError('tunnel_unavailable', `Could not download cloudflared${cause ? ` (${cause.slice(0, 200)})` : ''}. Run this again, or install cloudflared yourself: ${INSTALL_URL}`, 503);
-  }
-  say(`saved to ${kept}`);
-  return kept;
+  return download(dataDirectory(), say);
 }
 
 export async function openTunnel(port: number, options: TunnelOptions): Promise<Tunnel> {

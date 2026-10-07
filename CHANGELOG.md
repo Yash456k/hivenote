@@ -4,10 +4,11 @@
 
 Only the queen needs this version to open a tunnel. Workers on 0.3 can connect to it; each command there prints one line suggesting the update. Notes, tokens and connections are kept.
 
-- **`hivenote serve public` puts the queen on the internet.** It opens a Cloudflare quick tunnel and prints an https address that workers connect to from anywhere, with no account, domain or open port. HiveNote downloads Cloudflare's `cloudflared` the first time, unless it is already installed. The address is random and lasts until the command stops.
+- **`hivenote serve public` puts the queen on the internet.** It opens a Cloudflare quick tunnel and prints an https address that workers connect to from anywhere, with no account, domain or open port. The first time on a machine it says what a public hive means and asks you to agree; an agent or a script cannot agree for you. Unless `cloudflared` is already installed, HiveNote downloads one fixed release of it and runs it only if its checksum matches. The address is random and lasts until the command stops.
 - **`connect` offers the token a machine already has.** When a hive's address changes, `hivenote connect NEW-ADDRESS` asks whether to use the saved token, and Enter means yes, so nothing is pasted again. The reference has the steps for moving the queen to another machine.
 - **`wait` takes a time limit.** It still gives up after 9 minutes by default. End the command with `90s`, `30m`, `2h` or `forever` to choose, for scripts and services that nothing cuts off at 10 minutes.
 - **Shell habits work.** `hivenote ls`, `cat`, `grep`, `find`, `rm` and `log` do what `list`, `read`, `search`, `delete` and `history` do.
+- **`serve` and `ui` no longer print Node's SQLite warning.**
 - **`wait` keeps waiting when the queen is down behind a tunnel.** A tunnel or proxy answers with its own error page while the queen restarts. `wait` used to stop there with "invalid JSON response"; now it treats that as the queen being unreachable and checks again.
 
 ## 0.3.2

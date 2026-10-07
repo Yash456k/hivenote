@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { SqliteStore } from '../dist/sqlite.js';
 import { detectAgent, isSupportedNode, MINIMUM_NODE } from '../dist/runtime.js';
 import { spawn } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import http from 'node:http';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { cli, cliJson, fixture, run, sandbox } from './helpers.mjs';
 
 test('wait holds on for a note that does not exist yet, and wait with no name wakes on any change', async t => {
@@ -191,7 +192,14 @@ console.error('INF |  https://busy-bees-test.trycloudflare.com  |');
 console.error('INF Registered tunnel connection connIndex=0');
 setInterval(() => {}, 1000);
 `, { mode: 0o755 });
-  const queen = spawn(process.execPath, [cli, 'serve', 'public', ':0'], { env: { ...process.env, HIVENOTE_DB: join(dir, 'hive.db'), HIVENOTE_CLOUDFLARED: fake } });
+  const env = { HIVENOTE_HOME: join(dir, 'home'), HIVENOTE_DB: join(dir, 'hive.db'), HIVENOTE_CLOUDFLARED: fake };
+  // Nobody at a terminal has agreed to a public hive on this machine yet, so a script is refused.
+  const refused = await run(process.execPath, [cli, 'serve', 'public', ':0'], { env });
+  assert.equal(refused.stderr.trim(), JSON.stringify({ error: JSON.parse(refused.stderr).error }), 'one line of JSON, and no SQLite warning');
+  assert.equal(JSON.parse(refused.stderr).error.code, 'consent_needed');
+  mkdirSync(env.HIVENOTE_HOME, { recursive: true });
+  writeFileSync(join(env.HIVENOTE_HOME, 'public-agreed'), 'a person said yes\n');
+  const queen = spawn(process.execPath, [cli, 'serve', 'public', ':0'], { env: { ...process.env, ...env } });
   t.after(() => queen.kill());
   const said = JSON.parse(String(await new Promise(resolve => queen.stdout.once('data', resolve))));
   assert.equal(said.public, 'https://busy-bees-test.trycloudflare.com');
@@ -202,6 +210,16 @@ setInterval(() => {}, 1000);
   const running = () => { try { process.kill(tunnel, 0); return true; } catch { return false; } };
   for (let i = 0; i < 50 && running(); i++) await new Promise(resolve => setTimeout(resolve, 100));
   assert.equal(running(), false, 'the tunnel program was left running');
+});
+
+test('a downloaded cloudflared that is not the expected file is deleted, never run', async t => {
+  const dir = join(await sandbox(t, 'download'), 'data');
+  const server = http.createServer((request, response) => { response.end('#!/bin/sh\necho not cloudflared\n'); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const { download } = await import('../dist/tunnel.js');
+  await assert.rejects(download(dir, () => {}, `http://127.0.0.1:${server.address().port}/`), error => error.code === 'tunnel_unavailable');
+  assert.deepEqual(readdirSync(dir), [], 'nothing was kept');
 });
 
 test('connecting to a hive at its new address offers the token this machine already has', async t => {
