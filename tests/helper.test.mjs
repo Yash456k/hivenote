@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { SqliteStore } from '../dist/sqlite.js';
@@ -39,4 +40,23 @@ test('commands on a worker share one connection to the queen, and the helper lea
   for (let i = 0; i < 50 && await kept(); i++) await sleep(100);
   assert.equal(await kept(), false, 'the helper left');
   assert.equal((await hive('list')).total, 1, 'and commands still work without it');
+});
+
+test('a "helper": "off" line in config.json turns the helper off, and connect keeps the line', async t => {
+  const dir = await sandbox(t, 'helper-off');
+  const store = new SqliteStore(join(dir, 'hive.db'), actor());
+  const { token } = store.tokenCreate('laptop', 'rw');
+  const server = await startServer(store, { host: '127.0.0.1', port: 0 });
+  t.after(async () => { await closeServer(server); store.close(); });
+  const home = join(dir, 'laptop');
+  mkdirSync(home, { recursive: true });
+  writeFileSync(join(home, 'config.json'), JSON.stringify({ helper: 'off' }));
+  // HIVENOTE_HELPER is empty here, so the line in the file is what decides.
+  const env = { HIVENOTE_HOME: home, HIVENOTE_HELPER: '' };
+  await cliJson(['connect', serverUrl(server)], { env, input: token + '\n' });
+  assert.equal(JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')).helper, 'off', 'connect kept the line');
+  await cliJson(['add', 'plan', 'The plan'], { env });
+  await sleep(1500);
+  assert.equal((await cliJson(['status'], { env })).connection, 'opened for each command (helper off)');
+  assert.deepEqual(readdirSync(home).filter(name => name.endsWith('.sock')), [], 'no helper was started');
 });

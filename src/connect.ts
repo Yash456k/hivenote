@@ -58,6 +58,11 @@ export function ask(question: string, hidden: boolean): Promise<string> {
   });
 }
 
+/** Lines a person put in config.json that have nothing to do with which queen is used. */
+function keptSettings(): { helper?: string } {
+  try { const { helper } = loadConfig(); return helper ? { helper } : {}; } catch { return {}; }
+}
+
 /** The token this machine already holds, and the address it was saved for. */
 function savedToken(): { url: string; token: string } | undefined {
   try {
@@ -115,13 +120,13 @@ export async function connect(givenUrl: string | undefined, io: Prompt = { tty: 
   const tokenFile = join(directory, 'token');
   writeFileSync(tokenFile, token + '\n', { mode: 0o600 });
   if (process.platform !== 'win32') chmodSync(tokenFile, 0o600);
-  saveConfig({ url, tokenFile });
+  saveConfig({ url, tokenFile, ...keptSettings() });
   return { connected: url, entries: total };
 }
 
 /** `hivenote disconnect`: go back to the local database and forget the stored token. */
 export function disconnect(): { disconnected: true } {
-  saveConfig({});
+  saveConfig(keptSettings());
   rmSync(join(configDirectory(), 'token'), { force: true });
   return { disconnected: true };
 }

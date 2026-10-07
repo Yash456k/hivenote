@@ -26,10 +26,15 @@ import { configDirectory } from './config.js';
  * in its socket's name, so connecting elsewhere or updating simply starts another.
  */
 
-/** HIVENOTE_HELPER=off never uses a helper; a number is how many idle seconds one stays. */
-const setting = process.env.HIVENOTE_HELPER?.trim().toLowerCase();
-export const helperEnabled = setting !== 'off' && setting !== '0';
-const idleMs = (/^\d+$/u.test(setting ?? '') ? Number(setting) : 600) * 1000;
+/**
+ * Whether this machine uses a helper, and how long one stays idle. People set it with a
+ * "helper" line in config.json, or with HIVENOTE_HELPER for one command; the variable wins.
+ * "off" (or 0) never uses a helper, a number is the idle seconds, anything else is the default.
+ */
+export function helperPlan(configured?: string): { enabled: boolean; idleMs: number } {
+  const setting = (process.env.HIVENOTE_HELPER?.trim() || configured || 'on').toLowerCase();
+  return { enabled: setting !== 'off' && setting !== '0', idleMs: (/^\d+$/u.test(setting) ? Number(setting) : 600) * 1000 };
+}
 
 const LIMIT = 6 * 1024 * 1024;   // one answer is at most 5 MB
 type Labels = { agent?: string; session?: string };
@@ -150,8 +155,7 @@ export class HelperStore implements Store {
 }
 
 /** Whether a helper for this queen and token is answering right now. */
-export async function helperRunning(url: string, token: string): Promise<boolean> {
-  if (!helperEnabled) return false;
+export function helperRunning(url: string, token: string): Promise<boolean> {
   return new Promise(resolve => {
     const socket = net.connect(address(url, token));
     socket.once('connect', () => { socket.destroy(); resolve(true); });
@@ -161,7 +165,7 @@ export async function helperRunning(url: string, token: string): Promise<boolean
 
 // ---------- The helper's side ----------
 
-export async function runHelper(url: string, token: string): Promise<void> {
+export async function runHelper(url: string, token: string, idleMs: number): Promise<void> {
   const path = address(url, token);
   // Another helper may already be listening; one that crashed leaves its socket file behind.
   if (await helperRunning(url, token)) return;

@@ -5,7 +5,11 @@ import { randomUUID } from 'node:crypto';
 import { HiveNoteError } from './contract.js';
 import { validateServerUrl } from './client.js';
 
-export interface Config { db?: string; url?: string; tokenFile?: string; agent?: string; session?: string; }
+export interface Config {
+  db?: string; url?: string; tokenFile?: string; agent?: string; session?: string;
+  /** The connection helper on a worker: "off", "on", or how many idle seconds it stays. */
+  helper?: string;
+}
 export function configDirectory(env: NodeJS.ProcessEnv = process.env): string {
   if (env.HIVENOTE_HOME) return resolve(env.HIVENOTE_HOME);
   if (process.platform === 'win32') return join(env.APPDATA || join(homedir(), 'AppData', 'Roaming'), 'hivenote');
@@ -23,13 +27,14 @@ export function defaultDbPath(): string { return join(dataDirectory(), 'data.db'
 function validate(input: unknown): Config {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new HiveNoteError('invalid_config', 'Config must be a JSON object');
   const value = input as Record<string, unknown>;
-  const allowed = ['db', 'url', 'tokenFile', 'agent', 'session'];
+  const allowed = ['db', 'url', 'tokenFile', 'agent', 'session', 'helper'];
   if (Object.keys(value).some(key => !allowed.includes(key))) throw new HiveNoteError('invalid_config', 'Config contains unsupported fields');
   for (const key of allowed) if (value[key] !== undefined && (typeof value[key] !== 'string' || !value[key])) throw new HiveNoteError('invalid_config', `Config field ${key} must be a nonempty string`);
   if (value.db && value.url) throw new HiveNoteError('invalid_config', '--db and --url are mutually exclusive, including persistent configuration');
   if (typeof value.url === 'string') validateServerUrl(value.url);
   for (const label of ['agent', 'session']) if (typeof value[label] === 'string' && value[label].length > 256) throw new HiveNoteError('invalid_config', `${label} label must be at most 256 characters`);
   if (value.tokenFile && !value.url) throw new HiveNoteError('invalid_config', 'tokenFile requires a remote URL');
+  if (typeof value.helper === 'string' && !/^(on|off|\d+)$/u.test(value.helper)) throw new HiveNoteError('invalid_config', 'Config field helper must be "on", "off", or a number of idle seconds such as "300"');
   return { ...value } as Config;
 }
 export function loadConfig(path = configPath()): Config {

@@ -2,7 +2,7 @@
 
 ## 0.4.1
 
-- **Commands on a worker share one open connection.** Opening a connection to a queen far away took longer than the request itself. The first command now starts a small helper in the background that keeps the connection open for the ones after it; it leaves after ten idle minutes. From India to a queen in Germany a command went from about 600 ms to about 250 ms. Only workers need this version. `HIVENOTE_HELPER=off` turns it off, and `hivenote status` shows whether the connection is kept open.
+- **Commands on a worker share one open connection.** Opening a connection to a queen far away took longer than the request itself. The first command now starts a small helper in the background that keeps the connection open for the ones after it; it leaves after ten idle minutes. From India to a queen in Germany a command went from about 600 ms to about 250 ms. Only workers need this version. A `"helper": "off"` line in `config.json` turns it off on a machine (`HIVENOTE_HELPER=off` for one command), and `hivenote status` shows whether the connection is kept open.
 - **`hivenote mcp` on a worker keeps its connection open too.**
 
 ## 0.4.0
