@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0
+
+Only the queen needs this version to open a tunnel. Workers on 0.3 can connect to it; each command there prints one line suggesting the update. Notes, tokens and connections are kept.
+
+- **`hivenote serve public` puts the queen on the internet.** It opens a Cloudflare quick tunnel and prints an https address that workers connect to from anywhere, with no account, domain or open port. HiveNote downloads Cloudflare's `cloudflared` the first time, unless it is already installed. The address is random and lasts until the command stops.
+- **`wait` keeps waiting when the queen is down behind a tunnel.** A tunnel or proxy answers with its own error page while the queen restarts. `wait` used to stop there with "invalid JSON response"; now it treats that as the queen being unreachable and checks again.
+
 ## 0.3.2
 
 - **`wait` holds on for a note that doesn't exist yet.** `hivenote wait api-notes` used to fail when nobody had added `api-notes`; now it says so and wakes when someone does. `hivenote wait build-api done` waits until the task exists and is done.

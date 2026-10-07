@@ -37,6 +37,7 @@ Tasks
 
 Machines
   hivenote serve [HOST][:PORT]            be the queen: share this hive (default 127.0.0.1:7391)
+  hivenote serve public                   be the queen on the internet, through a Cloudflare tunnel
   hivenote ui                             open the dashboard for this machine's hive
   hivenote connect [URL]                  use the queen's hive from this machine
   hivenote disconnect                     go back to this machine's own hive
@@ -241,7 +242,7 @@ function stopOnSignal(stop: () => void): void {
   process.once('SIGTERM', stop);
 }
 
-/** serve [HOST][:PORT], or ui [PORT]. */
+/** serve [HOST][:PORT], serve public [:PORT], or ui [PORT]. */
 function address(word: string | undefined, fallbackHost: string): { host: string; port: number | undefined } {
   if (word === undefined) return { host: fallbackHost, port: undefined };
   const match = /^(?:(.*?):)?(\d+)$/u.exec(word);
@@ -251,7 +252,10 @@ function address(word: string | undefined, fallbackHost: string): { host: string
 }
 
 async function runServer(store: LocalStore, command: 'serve' | 'ui', words: string[]): Promise<void> {
-  if (words.length > 1) fail(command === 'serve' ? 'Usage: hivenote serve [HOST][:PORT]' : 'Usage: hivenote ui [PORT]');
+  // serve public: the tunnel reaches the hive on this machine, so only the port can be chosen.
+  const tunnelled = command === 'serve' && words[0] === 'public';
+  if (tunnelled) words = words.slice(1);
+  if (words.length > 1 || (tunnelled && words[0] !== undefined && !/^:\d+$/u.test(words[0]))) fail(command === 'serve' ? 'Usage: hivenote serve [HOST][:PORT] | hivenote serve public [:PORT]' : 'Usage: hivenote ui [PORT]');
   const { startServer } = await import('./http.js');
   const { host, port: chosen } = address(words[0], '127.0.0.1');
   // ui only shows this machine's hive, so it takes the next free port; serve keeps the one workers use.
@@ -268,10 +272,22 @@ async function runServer(store: LocalStore, command: 'serve' | 'ui', words: stri
     }
   }
   const running = server!;
-  stopOnSignal(() => { running.close(() => store.close()); running.closeIdleConnections(); });
+  let tunnel: { stop(): void } | undefined;
+  const stop = (): void => { tunnel?.stop(); running.close(() => store.close()); running.closeIdleConnections(); };
+  stopOnSignal(stop);
   const port = (running.address() as { port: number }).port;
   const local = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
-  if (command === 'serve') {
+  if (tunnelled) {
+    const serving = `http://${host}:${port}`;
+    const { openTunnel } = await import('./tunnel.js');
+    try {
+      tunnel = await openTunnel(port, {
+        say: message => { process.stderr.write(`hivenote: ${message}\n`); },
+        // The first address, then a line for every new one if the tunnel had to start again.
+        address: (url, previous) => output(previous === undefined ? { serving, public: url, dashboard: `${url}/` } : { public: url, was: previous }),
+      });
+    } catch (error) { running.close(); running.closeAllConnections(); throw error; }
+  } else if (command === 'serve') {
     output({ serving: `http://${host}:${port}`, dashboard: `http://${local}:${port}/` });
   } else {
     const url = `http://127.0.0.1:${port}/#k=${viewerKey}`;

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { SqliteStore } from '../dist/sqlite.js';
 import { HttpStore } from '../dist/client.js';
 import { startServer } from '../dist/http.js';
+import { waitForNote } from '../dist/wait.js';
 import { actor, fixture, params, sandbox, serverUrl, closeServer, root } from './helpers.mjs';
 
 async function setup(t, options = {}) {
@@ -107,4 +108,28 @@ test('a client warns once when the hive runs a different release', async t => {
   }
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /runs 0\.1\.0.*npm install -g hivenote@latest/u);
+});
+
+test('a worker keeps waiting while a tunnel answers for a queen that is down', async t => {
+  const { store, rw, url } = await setup(t);
+  await store.call('create', params(fixture({ name: 'ship-it', kind: 'task', status: 'todo' })));
+  // A tunnel in front of the queen: while she is down it answers with its own error page.
+  let down = false;
+  const tunnel = http.createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    if (down) { response.writeHead(502, { 'content-type': 'text/html; charset=UTF-8' }); response.end('<!DOCTYPE html><title>502: Bad gateway</title>'); return; }
+    const answer = await fetch(url + request.url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: request.headers.authorization }, body: Buffer.concat(chunks) });
+    response.writeHead(answer.status, { 'content-type': 'application/json' });
+    response.end(await answer.text());
+  });
+  await new Promise(resolve => tunnel.listen(0, '127.0.0.1', resolve));
+  t.after(() => closeServer(tunnel));
+  const waiting = waitForNote(new HttpStore(serverUrl(tunnel), rw.token, { retries: 0 }), { name: 'ship-it', status: 'done', timeoutSeconds: 20, intervalMs: 100 });
+  await new Promise(resolve => setTimeout(resolve, 300));
+  down = true;
+  await new Promise(resolve => setTimeout(resolve, 500));
+  down = false;
+  await store.call('update_task', params({ note: 'ship-it', status: 'done' }));
+  assert.equal((await waiting).note.status, 'done');
 });

@@ -67,7 +67,16 @@ export async function connect(givenUrl: string | undefined): Promise<{ connected
 
   // Check before saving, so a typo fails here rather than in the next agent command.
   const probe = new HttpStore(url, token, { retries: 0 });
-  const { total } = await probe.call('list', { limit: 1 }) as { total: number };
+  let total: number;
+  try {
+    ({ total } = await probe.call('list', { limit: 1 }) as { total: number });
+  } catch (error) {
+    // The address `hivenote serve public` prints is new to the whole internet.
+    if (error instanceof HiveNoteError && error.code === 'transport_error' && host.endsWith('.trycloudflare.com')) {
+      throw new HiveNoteError('transport_error', `Can't reach the hive at ${url}. A tunnel's address can take up to a minute to work everywhere, and it stops working when hivenote serve public stops on the queen. Check that it is still running there, then try again.`, 503);
+    }
+    throw error;
+  }
 
   const directory = configDirectory();
   mkdirSync(directory, { recursive: true, mode: 0o700 });

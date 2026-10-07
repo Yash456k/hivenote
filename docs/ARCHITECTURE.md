@@ -22,6 +22,7 @@ dashboard ────┘ (ui/, reads through HTTP)
 | `views.ts` | Turning rows into notes, events and the brief listing |
 | `validate.ts` | Limits and checks on everything that enters the store |
 | `http.ts`, `client.ts` | The queen's server and the worker's client |
+| `tunnel.ts` | `serve public`: finding or downloading `cloudflared`, running it, and starting it again if it stops |
 | `connect.ts`, `config.ts` | Saving which queen to use, and the token file |
 | `wait.ts` | Waiting for a note to change or a task to reach a status |
 | `mcp.ts` | The MCP tools |

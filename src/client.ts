@@ -56,6 +56,11 @@ export class HttpStore implements Store {
           if (attempt < this.retries) { await pause(attempt); continue; }
           throw new HiveNoteError('transport_error', 'Server connection interrupted', 503);
         }
+        // A tunnel or proxy in front of the queen answers with its own error page while she is down.
+        if (response.status >= 500) {
+          if (attempt < this.retries) { await pause(attempt); continue; }
+          throw new HiveNoteError('transport_error', 'Unable to reach HiveNote server', 503);
+        }
         throw new HiveNoteError('invalid_response', 'Server returned an invalid JSON response', 502);
       }
       if (!payload || typeof payload !== 'object') throw new HiveNoteError('invalid_response', 'Server returned an invalid response', 502);

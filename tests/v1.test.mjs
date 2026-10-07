@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { SqliteStore } from '../dist/sqlite.js';
 import { detectAgent, isSupportedNode, MINIMUM_NODE } from '../dist/runtime.js';
 import { spawn } from 'node:child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { cli, cliJson, fixture, run, sandbox } from './helpers.mjs';
 
 test('wait holds on for a note that does not exist yet, and wait with no name wakes on any change', async t => {
@@ -164,4 +165,27 @@ test('a worker keeps waiting when the queen restarts mid-wait', async t => {
   const result = await waiting;
   assert.equal(result.code, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).note.status, 'done');
+});
+
+test('serve public runs the tunnel program, prints the address it gives, and stops it on the way out', { skip: process.platform === 'win32' }, async t => {
+  const dir = await sandbox(t, 'tunnel');
+  // Stands in for cloudflared: it says what the real one says once Cloudflare has the tunnel.
+  const fake = join(dir, 'cloudflared');
+  writeFileSync(fake, `#!${process.execPath}
+import('node:fs').then(fs => fs.writeFileSync(process.argv[1] + '.pid', String(process.pid)));
+console.error('INF |  https://busy-bees-test.trycloudflare.com  |');
+console.error('INF Registered tunnel connection connIndex=0');
+setInterval(() => {}, 1000);
+`, { mode: 0o755 });
+  const queen = spawn(process.execPath, [cli, 'serve', 'public', ':0'], { env: { ...process.env, HIVENOTE_DB: join(dir, 'hive.db'), HIVENOTE_CLOUDFLARED: fake } });
+  t.after(() => queen.kill());
+  const said = JSON.parse(String(await new Promise(resolve => queen.stdout.once('data', resolve))));
+  assert.equal(said.public, 'https://busy-bees-test.trycloudflare.com');
+  assert.equal((await (await fetch(`${said.serving}/health`)).json()).queen, true);
+  const tunnel = Number(readFileSync(`${fake}.pid`, 'utf8'));
+  queen.kill();
+  await new Promise(resolve => queen.once('exit', resolve));
+  const running = () => { try { process.kill(tunnel, 0); return true; } catch { return false; } };
+  for (let i = 0; i < 50 && running(); i++) await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(running(), false, 'the tunnel program was left running');
 });

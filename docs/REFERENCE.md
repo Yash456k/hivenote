@@ -59,6 +59,7 @@ hivenote token add dashboard read-only          # for a browser that only watche
 hivenote token list
 hivenote token remove laptop                    # that machine is shut out at its next request
 hivenote serve 0.0.0.0                          # or serve 0.0.0.0:8080, or serve :7391
+hivenote serve public                           # on the internet through a Cloudflare tunnel (or serve public :8080)
 ```
 
 `serve` listens on 127.0.0.1:7391 unless told otherwise. `0.0.0.0` means every address the queen has; workers connect to one of them, such as `http://192.168.1.20:7391`. The database stores only a hash of each token.
@@ -74,7 +75,14 @@ hivenote disconnect                             # back to this machine's own hiv
 
 `connect` checks the URL and token before saving them, keeps the token in a private file (mode 600) in HiveNote's settings folder, and from then on every note and task command on that machine, including agents', uses the queen. `ui`, `serve`, `token` and `backup` only run on the machine that holds the hive; from a worker, open the queen's dashboard at her address instead. If the queen can't be reached, commands fail; they never quietly fall back to a local hive. `status` says which of these is wrong: the queen is down, the address isn't a queen, or the token was rejected.
 
-Any address works: your LAN, Tailscale, or a tunnel. The token travels with every request, so over plain `http://` anyone on the same network could read it; `connect` warns about that except for this machine and Tailscale addresses, which encrypt traffic themselves. On a network you don't fully trust, and always across the internet, use HTTPS or Tailscale. For an existing Cloudflare tunnel, add a route to its configuration:
+**`serve public`** gives the queen an address on the internet without an account, a domain or an open port. It serves the hive on 127.0.0.1 and runs Cloudflare's `cloudflared` program, which connects out to Cloudflare and gets a random `https://….trycloudflare.com` address (a [quick tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/)). The command prints that address; workers use it with `hivenote connect`, and the dashboard is at the same address. Every request still needs a token.
+
+- The address lasts until the command stops. Starting it again gives a new address, and every worker runs `hivenote connect` again. If `cloudflared` stops by itself, HiveNote starts it again and prints the new address.
+- A new address can take up to a minute to work from every network.
+- Cloudflare gives quick tunnels no uptime guarantee and allows 200 requests at a time. For a hive that must stay at one address, use a tunnel of your own or Tailscale, as below.
+- HiveNote uses the `cloudflared` on your PATH if there is one. Otherwise it downloads the latest release for your machine from `github.com/cloudflare/cloudflared` once, over https, and keeps it beside the database. Set `HIVENOTE_CLOUDFLARED` to use a copy somewhere else.
+
+Any other address works too: your LAN, Tailscale, or a tunnel you run. The token travels with every request, so over plain `http://` anyone on the same network could read it; `connect` warns about that except for this machine and Tailscale addresses, which encrypt traffic themselves. On a network you don't fully trust, and always across the internet, use HTTPS or Tailscale. For an existing Cloudflare tunnel, add a route to its configuration:
 
 ```yaml
 ingress:
@@ -101,6 +109,7 @@ Agents and scripts always get JSON: results on stdout, and errors on stderr as `
 |---|---|
 | `HIVENOTE_HOME` | One folder for both the settings and the database |
 | `HIVENOTE_DB` | Use this database file for this command |
+| `HIVENOTE_CLOUDFLARED` | The `cloudflared` program `serve public` runs, instead of the one on your PATH or the one HiveNote downloads |
 | `HIVENOTE_URL` + `HIVENOTE_TOKEN` | Use this queen for this command, without `connect`. The token saved by `connect` is only ever sent to the queen it was saved for |
 
 Without them, the database lives at `~/.local/share/hivenote/data.db` on Linux, `~/Library/Application Support/hivenote` on macOS and `%LOCALAPPDATA%\hivenote` on Windows; settings live in `~/.config/hivenote`, the same macOS folder, and `%APPDATA%\hivenote`.

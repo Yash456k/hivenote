@@ -109,6 +109,11 @@ export function pretty(command: string, value: unknown): string {
     case 'connect': return `Connected to the queen at ${String(v.connected)} (${notes(v.entries)}). Every hivenote command here now uses that hive.`;
     case 'disconnect': return 'Disconnected. This machine uses its own hive again. To shut the old token out too, run hivenote token remove LABEL on the queen.';
     case 'serve': {
+      if (v.public) {
+        const again = `hivenote connect ${String(v.public)}`;
+        if (v.was) return `The tunnel had to start again, so the hive has a new address: ${bold(String(v.public))}\n${dim(`On every worker run: ${again}`)}`;
+        return `This machine is now the queen, and its hive is on the internet at ${bold(String(v.public))}\n${dim(`Dashboard: ${String(v.dashboard)}`)}\n${dim(`Let a machine in: hivenote token add LABEL here, in another terminal, then ${again} on that machine.`)}\n${dim('A new address can take up to a minute to work everywhere. It lasts until this command stops; starting it again gives a new one, and workers connect again.')}`;
+      }
       // 0.0.0.0 means "every address of this machine"; it is not an address another machine can use.
       const everywhere = /\/\/(0\.0\.0\.0|\[::\])/u.test(String(v.serving));
       const port = String(v.serving).split(':').pop()!;
