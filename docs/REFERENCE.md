@@ -62,7 +62,7 @@ hivenote token add dashboard read-only          # for a browser that only watche
 hivenote token list
 hivenote token remove laptop                    # that machine is shut out at its next request
 hivenote serve 0.0.0.0                          # or serve 0.0.0.0:8080, or serve :7391
-hivenote serve public                           # on the internet through a Cloudflare tunnel (or serve public :8080)
+hivenote serve public                           # on the internet through a Cloudflare tunnel (or serve public :8080; add yes to agree without being asked)
 ```
 
 `serve` listens on 127.0.0.1:7391 unless told otherwise. `0.0.0.0` means every address the queen has; workers connect to one of them, such as `http://192.168.1.20:7391`. The database stores only a hash of each token.
@@ -83,7 +83,7 @@ hivenote disconnect                             # back to this machine's own hiv
 - The address lasts until the command stops. Starting it again gives a new address, and every worker runs `hivenote connect` again. If `cloudflared` stops by itself, HiveNote starts it again and prints the new address.
 - A new address can take up to a minute to work from every network.
 - Cloudflare gives quick tunnels no uptime guarantee and allows 200 requests at a time. For a hive that must stay at one address, use a tunnel of your own or Tailscale, as below.
-- **You are asked first.** The first time on a machine, `serve public` says what it is about to do and asks `Put this hive on the internet? [y/N]`; the default is no. After a yes it does not ask again there, and every later start prints one line saying the hive is public and which tokens get in. Without a terminal (an agent, a script, a service) it refuses until a person has agreed once on that machine.
+- **You are asked first.** The first time on a machine, `serve public` says what it is about to do and asks `Put this hive on the internet? [y/N]`; the default is no. After a yes it does not ask again there, and every later start prints one line saying the hive is public and which machines hold a token. Without a terminal (an agent, a script, a service) it answers with the same explanation and stops; running it again as `hivenote serve public yes` agrees.
 - **What public means.** Anyone who has the address can reach the queen; reading or writing still needs a token. The traffic passes through Cloudflare, which can read it, so don't keep secrets in a hive you make public.
 - **Which cloudflared runs.** The one on your PATH if there is one, or the one `HIVENOTE_CLOUDFLARED` points at; those are yours and are run as they are. Otherwise HiveNote downloads one fixed release for your machine from `github.com/cloudflare/cloudflared` and keeps it beside the database. It is run only if its SHA-256 is the one Cloudflare published for that release; the kept copy is checked again at every start, and a file that doesn't match is deleted without being run.
 

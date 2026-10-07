@@ -5,7 +5,7 @@ import { SqliteStore } from '../dist/sqlite.js';
 import { detectAgent, isSupportedNode, MINIMUM_NODE } from '../dist/runtime.js';
 import { spawn } from 'node:child_process';
 import http from 'node:http';
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { cli, cliJson, fixture, run, sandbox } from './helpers.mjs';
 
 test('wait holds on for a note that does not exist yet, and wait with no name wakes on any change', async t => {
@@ -193,16 +193,16 @@ console.error('INF Registered tunnel connection connIndex=0');
 setInterval(() => {}, 1000);
 `, { mode: 0o755 });
   const env = { HIVENOTE_HOME: join(dir, 'home'), HIVENOTE_DB: join(dir, 'hive.db'), HIVENOTE_CLOUDFLARED: fake };
-  // Nobody at a terminal has agreed to a public hive on this machine yet, so a script is refused.
+  // Nobody has agreed to a public hive on this machine yet. A script is told what it means, and how to agree.
   const refused = await run(process.execPath, [cli, 'serve', 'public', ':0'], { env });
   assert.equal(refused.stderr.trim(), JSON.stringify({ error: JSON.parse(refused.stderr).error }), 'one line of JSON, and no SQLite warning');
   assert.equal(JSON.parse(refused.stderr).error.code, 'consent_needed');
-  mkdirSync(env.HIVENOTE_HOME, { recursive: true });
-  writeFileSync(join(env.HIVENOTE_HOME, 'public-agreed'), 'a person said yes\n');
-  const queen = spawn(process.execPath, [cli, 'serve', 'public', ':0'], { env: { ...process.env, ...env } });
+  assert.match(refused.stderr, /passes through Cloudflare.*hivenote serve public yes/u);
+  const queen = spawn(process.execPath, [cli, 'serve', 'public', ':0', 'yes'], { env: { ...process.env, ...env } });
   t.after(() => queen.kill());
   const said = JSON.parse(String(await new Promise(resolve => queen.stdout.once('data', resolve))));
   assert.equal(said.public, 'https://busy-bees-test.trycloudflare.com');
+  assert.ok(existsSync(join(env.HIVENOTE_HOME, 'public-agreed')), 'the yes is remembered for this machine');
   assert.equal((await (await fetch(`${said.serving}/health`)).json()).queen, true);
   const tunnel = Number(readFileSync(`${fake}.pid`, 'utf8'));
   queen.kill();
