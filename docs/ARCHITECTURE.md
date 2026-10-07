@@ -23,6 +23,7 @@ dashboard ────┘ (ui/, reads through HTTP)
 | `validate.ts` | Limits and checks on everything that enters the store |
 | `http.ts`, `client.ts` | The queen's server and the worker's client |
 | `tunnel.ts` | `serve public`: finding or downloading `cloudflared`, running it, and starting it again if it stops |
+| `helper.ts` | The connection helper on a worker: a background process that keeps one connection to the queen open, and the commands' side of talking to it |
 | `connect.ts`, `config.ts` | Saving which queen to use, and the token file |
 | `wait.ts` | Waiting for a note to change or a task to reach a status |
 | `mcp.ts` | The MCP tools |
@@ -40,3 +41,4 @@ Writes take the write lock up front, check and change everything inside one tran
 - There is no version checking or locking. The latest write wins, history keeps everything, and `restore` is the undo.
 - A task's status plus who changed it last and when is the whole coordination model.
 - Workers never load SQLite, and normal commands never load the MCP SDK.
+- The connection helper is the only thing that runs between commands, and only on a worker. Nothing depends on it: every command works the same without it, just slower.

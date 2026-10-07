@@ -1,6 +1,19 @@
 import { clientParams, isMethod, HiveNoteError, VERSION, type Method, type Params, type Store } from './contract.js';
 
-export interface HttpStoreOptions { timeoutMs?: number; retries?: number; agent?: string; session?: string; }
+export interface HttpStoreOptions {
+  timeoutMs?: number; retries?: number; agent?: string; session?: string;
+  /** How requests are sent; the connection helper passes one that keeps its connection open. */
+  fetch?: typeof fetch;
+  /** Leave the version warning to whoever reads serverVersion. */
+  quiet?: boolean;
+}
+
+/** Warn when this machine and the hive differ in major or minor version; patches stay quiet. Callers say it once. */
+export function warnOnOtherVersion(server: string, hive: string): void {
+  const release = (version: string): string => version.split('.').slice(0, 2).join('.');
+  if (release(server) === release(VERSION)) return;
+  process.stderr.write(`hivenote: this machine runs ${VERSION} but the hive at ${hive} runs ${server}. Update the older one with: npm install -g hivenote@latest\n`);
+}
 export function validateServerUrl(value: string): URL {
   let url: URL;
   try { url = new URL(value); } catch { throw new HiveNoteError('invalid_config', 'Server URL must be an absolute HTTP(S) URL'); }
@@ -14,6 +27,11 @@ export class HttpStore implements Store {
   private readonly timeoutMs: number;
   private readonly retries: number;
   private readonly labels: { agent?: string; session?: string };
+  private readonly send: typeof fetch;
+  private readonly quiet: boolean;
+  /** The version the hive last said it runs. */
+  serverVersion: string | null = null;
+  private versionChecked = false;
   constructor(url: string, private readonly token: string, options: HttpStoreOptions = {}) {
     this.endpoint = new URL('/v1/call', validateServerUrl(url)).href;
     if (!token || token.trim() !== token || /[\s\x00-\x1f\x7f]/u.test(token)) throw new HiveNoteError('invalid_config', 'A nonempty bearer token is required');
@@ -21,6 +39,8 @@ export class HttpStore implements Store {
     this.retries = options.retries ?? 2;
     if (!Number.isInteger(this.timeoutMs) || this.timeoutMs < 1 || this.timeoutMs > 300000 || !Number.isInteger(this.retries) || this.retries < 0 || this.retries > 5) throw new HiveNoteError('invalid_config', 'Invalid HTTP timeout or retry count');
     this.labels = {};
+    this.send = options.fetch ?? fetch;
+    this.quiet = options.quiet ?? false;
     this.setAttribution(options);
   }
   /** Labels are self-reported data; never authentication or authorization. */
@@ -42,12 +62,16 @@ export class HttpStore implements Store {
     for (let attempt = 0; ; attempt++) {
       let response: Response;
       try {
-        response = await fetch(this.endpoint, { method: 'POST', redirect: 'error', headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}` }, body, signal: AbortSignal.timeout(this.timeoutMs) });
+        response = await this.send(this.endpoint, { method: 'POST', redirect: 'error', headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}` }, body, signal: AbortSignal.timeout(this.timeoutMs) });
       } catch {
         if (attempt < this.retries) { await pause(attempt); continue; }
         throw new HiveNoteError('transport_error', 'Unable to reach HiveNote server', 503);
       }
-      this.checkVersion(response.headers.get('x-hivenote-version'));
+      this.serverVersion = response.headers.get('x-hivenote-version') ?? this.serverVersion;
+      if (!this.quiet && !this.versionChecked && this.serverVersion) {
+        this.versionChecked = true;
+        warnOnOtherVersion(this.serverVersion, new URL(this.endpoint).origin);
+      }
       if (response.status === 503 && (attempt < this.retries || Date.now() < busyUntil)) { await response.body?.cancel(); await pause(attempt); continue; }
       let payload: unknown;
       try { payload = await response.json(); } catch (error) {
@@ -72,16 +96,6 @@ export class HttpStore implements Store {
       if (!Object.hasOwn(object, 'result')) throw new HiveNoteError('invalid_response', 'Server response is missing result', 502);
       return object.result;
     }
-  }
-  private versionChecked = false;
-  /** Warn once when this machine and the hive differ in major or minor version; patches stay quiet. */
-  private checkVersion(server: string | null): void {
-    if (this.versionChecked || !server) return;
-    this.versionChecked = true;
-    const release = (version: string): string => version.split('.').slice(0, 2).join('.');
-    if (release(server) === release(VERSION)) return;
-    const hive = new URL(this.endpoint).origin;
-    process.stderr.write(`hivenote: this machine runs ${VERSION} but the hive at ${hive} runs ${server}. Update the older one with: npm install -g hivenote@latest\n`);
   }
   close(): void {}
 }

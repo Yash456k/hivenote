@@ -14,6 +14,9 @@ export const cli = join(root, 'dist/cli.js');
 // Tests that need a specific home still pass HIVENOTE_HOME explicitly.
 // Tests often run inside an agent; its markers would label every write.
 for (const marker of ['CLAUDECODE', 'CODEX_CI', 'CODEX_PERMISSION_PROFILE', 'CODEX_SANDBOX', 'HERMES_SESSION_ID', 'HERMES_AGENT']) delete process.env[marker];
+// A command on a worker starts a background helper that lives on for minutes. Tests that
+// are about the helper turn it on themselves.
+process.env.HIVENOTE_HELPER ??= 'off';
 if (!process.env.HIVENOTE_HOME) {
   process.env.HIVENOTE_HOME = await mkdtemp(join(tmpdir(), 'hivenote-test-home-'));
 }

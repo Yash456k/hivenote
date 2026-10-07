@@ -104,7 +104,7 @@ export function pretty(command: string, value: unknown): string {
     case 'restore': return `Restored ${bold(note!.name)}`;
     case 'mark': return `Marked ${bold(note!.name)} ${note!.status ?? 'todo'}`;
     case 'status': return v.hive === 'queen'
-      ? `Connected to the queen at ${String(v.url)}\n${dim(`${notes(v.notes)} · queen ${String(v.queen_version)} · this machine ${String(v.this_version)} · ${String(v.round_trip_ms)} ms`)}`
+      ? `Connected to the queen at ${String(v.url)}\n${dim(`${notes(v.notes)} · queen ${String(v.queen_version)} · this machine ${String(v.this_version)} · ${String(v.round_trip_ms)} ms · connection ${String(v.connection)}`)}`
       : `Using this machine's own hive at ${String(v.db)}\n${dim(`${notes(v.notes)} · version ${String(v.version)}`)}`;
     case 'connect': return `Connected to the queen at ${String(v.connected)} (${notes(v.entries)}). Every hivenote command here now uses that hive.`;
     case 'disconnect': return 'Disconnected. This machine uses its own hive again. To shut the old token out too, run hivenote token remove LABEL on the queen.';

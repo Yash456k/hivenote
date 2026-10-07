@@ -178,7 +178,10 @@ async function openLocalStore(config: Config): Promise<LocalStore> {
 /** The queen's hive when connected; otherwise the file on this machine. */
 async function openStore(config: Config): Promise<Store> {
   if (!config.url) return openLocalStore(config);
-  return new HttpStore(config.url, readToken(config), config.agent ? { agent: config.agent } : {});
+  const labels = config.agent ? { agent: config.agent } : {};
+  // Each command is a new process; the helper holds the connection they share.
+  const helper = await import('./helper.js');
+  return helper.helperEnabled ? new helper.HelperStore(config.url, readToken(config), labels) : new HttpStore(config.url, readToken(config), labels);
 }
 
 // ---------- Notes and tasks ----------
@@ -408,12 +411,16 @@ async function runStatus(config: Config): Promise<void> {
   }
   output({
     hive: 'queen', url, reachable: true, token: 'accepted', notes: total,
+    connection: await (await import('./helper.js')).helperRunning(url, readToken(config)) ? 'kept open' : 'opened for each command',
     queen_version: health.version ?? 'unknown', this_version: VERSION, round_trip_ms: Math.round(performance.now() - started),
   });
 }
 
 async function runMcp(config: Config): Promise<void> {
-  const store = await openStore(config);
+  // This process stays up for the whole session, so it keeps its own connection open.
+  const store = config.url
+    ? new HttpStore(config.url, readToken(config), { ...(config.agent ? { agent: config.agent } : {}), fetch: (await import('./helper.js')).keepAliveFetch() })
+    : await openStore(config);
   try {
     const { startMcp } = await import('./mcp.js');
     const server = await startMcp(store, config.agent ? { agent: config.agent } : {});
@@ -506,6 +513,8 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   const config = currentConfig(agent);
   if (command === 'status') { if (words.length) fail('Usage: hivenote status'); await runStatus(config); return; }
   if (command === 'mcp') { if (words.length) fail('Usage: hivenote mcp'); await runMcp(config); return; }
+  // Started by a command on a worker, never typed: holds the connection to the queen open.
+  if (command === '__helper') { if (config.url) await (await import('./helper.js')).runHelper(config.url, readToken(config)); return; }
   if (command === 'serve' || command === 'ui' || command === 'token' || command === 'backup') { await runOnThisMachine(command, words, config); return; }
 
   // hasOwn: a word like "constructor" is not a command just because every object has one.

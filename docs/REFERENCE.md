@@ -98,6 +98,8 @@ ingress:
 
 With Tailscale, `tailscale serve --bg --https=8444 http://127.0.0.1:7391` gives the queen a private HTTPS address on your tailnet. An SSH forward works too: `ssh -L 7391:127.0.0.1:7391 QUEEN_HOST`, then connect to `http://127.0.0.1:7391`.
 
+**One connection, kept open.** Each command is its own process, and opening a connection to a queen far away takes longer than the request itself. So the first command on a worker starts a small helper in the background that keeps one connection to the queen open, and the commands after it hand their request to the helper. From India to a queen in Germany that took a command from about 600 ms to about 250 ms. The helper leaves after ten idle minutes, and `hivenote status` says whether the connection is `kept open`. It listens only on a private socket in HiveNote's settings folder, answers only a command that holds the same token, and talks only to the queen this machine is connected to. If it is missing or stuck, a command goes to the queen directly, as it always did. `HIVENOTE_HELPER=off` turns it off.
+
 **Moving the queen.** To make another machine the queen:
 
 1. On the old queen, run `hivenote backup hive.db`, then stop `hivenote serve`. The old queen has to stop first; two machines serving copies of one hive drift apart.
@@ -124,6 +126,7 @@ Agents and scripts always get JSON: results on stdout, and errors on stderr as `
 | `HIVENOTE_HOME` | One folder for both the settings and the database |
 | `HIVENOTE_DB` | Use this database file for this command |
 | `HIVENOTE_CLOUDFLARED` | The `cloudflared` program `serve public` runs, instead of the one on your PATH or the one HiveNote downloads |
+| `HIVENOTE_HELPER` | `off` makes every command open its own connection to the queen; a number is how many idle seconds the connection helper stays (600 unless set) |
 | `HIVENOTE_URL` + `HIVENOTE_TOKEN` | Use this queen for this command, without `connect`. The token saved by `connect` is only ever sent to the queen it was saved for |
 
 Without them, the database lives at `~/.local/share/hivenote/data.db` on Linux, `~/Library/Application Support/hivenote` on macOS and `%LOCALAPPDATA%\hivenote` on Windows; settings live in `~/.config/hivenote`, the same macOS folder, and `%APPDATA%\hivenote`.
