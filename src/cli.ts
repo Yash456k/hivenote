@@ -8,7 +8,7 @@ import { HiveNoteError, VERSION, type Actor, type Method, type Params, type Stor
 import { HttpStore } from './client.js';
 import { configDirectory, defaultDbPath, loadConfig, readToken, resolveConfig, type Config } from './config.js';
 import { assertSupportedNode, detectAgent, quietSqliteWarning } from './runtime.js';
-import { waitForAnyChange, waitForNote, type TaskStatus } from './wait.js';
+import { WAIT_DEFAULTS, waitForAnyChange, waitForNote, type TaskStatus } from './wait.js';
 import { pretty } from './pretty.js';
 
 /** The hivenote command: read the words, pick this machine's hive or the queen's, run one command. */
@@ -34,6 +34,7 @@ Tasks
   hivenote mark NAME doing                (or todo, done, cancelled)
   hivenote wait NAME [done]               wait until it is done, or until it is added or changes at all
   hivenote wait                           wait until anything in the hive changes
+                                          wait gives up after 9 minutes; end it with 90s, 30m, 2h or forever to choose
 
 Machines
   hivenote serve [HOST][:PORT]            be the queen: share this hive (default 127.0.0.1:7391)
@@ -132,6 +133,21 @@ function taskStatus(value: string): TaskStatus {
   return value as TaskStatus;
 }
 
+/**
+ * A last word like 90s, 30m, 2h or forever says how long wait holds on. Without one it
+ * gives up after 9 minutes, which suits an agent whose tool ends a command at 10; a
+ * script or service with no such ceiling can ask for longer.
+ */
+function waitLimit(words: string[]): number {
+  const match = /^(?:(\d+)([smh])|forever)$/u.exec(words.at(-1) ?? '');
+  if (!match) return WAIT_DEFAULTS.timeoutSeconds;
+  words.pop();
+  if (match[1] === undefined) return 0;
+  const seconds = Number(match[1]) * { s: 1, m: 60, h: 3600 }[match[2] as 's' | 'm' | 'h'];
+  if (seconds < 1) fail('A time limit is at least 1s');
+  return seconds;
+}
+
 // ---------- Which hive ----------
 
 /** Saved config (from connect), overridden by HIVENOTE_DB or HIVENOTE_URL for scripts. */
@@ -225,14 +241,20 @@ const NOTES: Record<string, { usage: string; min: number; max: number; run: Run 
   },
   mark: { usage: `mark NAME ${STATUSES.join('|')}`, min: 2, max: 2, run: ([note, status], store) => store.call('update_task', { note, status: taskStatus(status!) }) },
   wait: {
-    usage: 'wait [NAME] [done]', min: 0, max: 2,
-    run: ([name, status], store) => name === undefined
-      ? waitForAnyChange(store, { timeoutSeconds: 540, intervalMs: 5000 })
-      : waitForNote(store, {
-        name, ...(status === undefined ? {} : { status: taskStatus(status) }),
-        timeoutSeconds: 540, intervalMs: 5000,
-        notice: message => { process.stderr.write(`hivenote: ${message}\n`); },
-      }),
+    usage: 'wait [NAME] [done] [30m|forever]', min: 0, max: 3,
+    run: (words, store) => {
+      const timeoutSeconds = waitLimit(words);
+      const [name, status] = words;
+      if (words.length > 2) fail('Usage: hivenote wait [NAME] [done] [30m|forever]');
+      const { intervalMs } = WAIT_DEFAULTS;
+      return name === undefined
+        ? waitForAnyChange(store, { timeoutSeconds, intervalMs })
+        : waitForNote(store, {
+          name, ...(status === undefined ? {} : { status: taskStatus(status) }),
+          timeoutSeconds, intervalMs,
+          notice: message => { process.stderr.write(`hivenote: ${message}\n`); },
+        });
+    },
   },
 };
 

@@ -69,7 +69,7 @@ hivenote wait                                    # wakes when anything in the hi
 
 A note or task that doesn't exist yet can be waited for too: `wait` says so, then wakes when someone adds it.
 
-Run `wait` in the **foreground**, not as a background job, and give the command a time limit of at least 10 minutes (in Claude Code, a Bash `timeout` of 600000). A background wait is lost if your session ends first. A timeout exits with an error; tell the user rather than waiting again and again.
+Run `wait` in the **foreground**, not as a background job, and give the command a time limit of at least 10 minutes (in Claude Code, a Bash `timeout` of 600000). Keep the 9-minute default inside an agent; a script or service with no time limit of its own can end the command with one, such as `hivenote wait build-api done 2h` or `forever`. A background wait is lost if your session ends first. A timeout exits with an error; tell the user rather than waiting again and again.
 
 ## Rules
 

@@ -22,6 +22,20 @@ test('wait holds on for a note that does not exist yet, and wait with no name wa
   assert.deepEqual(JSON.parse(anything.stdout).changes.map(change => [change.note, change.kind]), [['api-notes', 'create']]);
 });
 
+test('wait holds on for as long as its last word says', async t => {
+  const db = join(await sandbox(t, 'wait-limit'), 'notes.db');
+  await cliJson(['--db', db, 'task', 'ship-it', 'Ship it']);
+  const started = Date.now();
+  const short = await run(process.execPath, [cli, '--db', db, 'wait', 'ship-it', 'done', '1s']);
+  assert.equal(JSON.parse(short.stderr).error.code, 'timeout');
+  assert.match(short.stderr, /within 1 seconds/u);
+  assert.ok(Date.now() - started < 8000, 'gave up after about a second, not nine minutes');
+  // forever has no limit, and still wakes the moment the task is done.
+  const forever = run(process.execPath, [cli, '--db', db, 'wait', 'ship-it', 'done', 'forever']);
+  await cliJson(['--db', db, 'mark', 'ship-it', 'done']);
+  assert.equal(JSON.parse((await forever).stdout).note.status, 'done');
+});
+
 test('local CLI commands print no SQLite experimental warning', async t => {
   const db = join(await sandbox(t, 'quiet'), 'notes.db');
   const result = await run(process.execPath, [cli, '--db', db, 'list']);
