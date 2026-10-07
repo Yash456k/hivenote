@@ -7,6 +7,7 @@ npm ci
 npm run typecheck
 npm test                      # builds first
 node scripts/pack-smoke.mjs   # installs the real tarball and checks the CLI and MCP
+npm run bench                 # timings on this machine; not part of CI, whose machines are too uneven for them
 ```
 
 ## Releasing

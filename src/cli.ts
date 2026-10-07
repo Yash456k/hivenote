@@ -333,20 +333,25 @@ async function runServer(store: LocalStore, command: 'serve' | 'ui', words: stri
   }
   const running = server!;
   let tunnel: { stop(): void } | undefined;
-  const stop = (): void => { tunnel?.stop(); running.close(() => store.close()); running.closeIdleConnections(); };
+  let stopping = false;
+  const stop = (): void => { stopping = true; tunnel?.stop(); running.close(() => store.close()); running.closeIdleConnections(); };
   stopOnSignal(stop);
   const port = (running.address() as { port: number }).port;
   const local = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
   if (tunnelled) {
     const serving = `http://${host}:${port}`;
     const { openTunnel } = await import('./tunnel.js');
-    try {
-      tunnel = await openTunnel(port, {
-        say: message => { process.stderr.write(`hivenote: ${message}\n`); },
-        // The first address, then a line for every new one if the tunnel had to start again.
-        address: (url, previous) => output(previous === undefined ? { serving, public: url, dashboard: `${url}/` } : { public: url, was: previous }),
-      });
-    } catch (error) { running.close(); running.closeAllConnections(); throw error; }
+    const opening = openTunnel(port, {
+      say: message => { process.stderr.write(`hivenote: ${message}\n`); },
+      // The first address, then a line for every new one if the tunnel had to start again.
+      address: (url, previous) => output(previous === undefined ? { serving, public: url, dashboard: `${url}/` } : { public: url, was: previous }),
+    });
+    tunnel = opening;
+    try { await opening.opened; } catch (error) {
+      // Stopped with Ctrl+C while the tunnel was opening: that is not a failure to report.
+      if (stopping) return;
+      running.close(); running.closeAllConnections(); throw error;
+    }
   } else if (command === 'serve') {
     output({ serving: `http://${host}:${port}`, dashboard: `http://${local}:${port}/` });
   } else {
@@ -486,7 +491,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   // Readable output only for a person typing in a terminal: never for a detected agent or --agent.
   view.human = process.stdout.isTTY === true && !json && agent === undefined && detectAgent() === undefined;
   const typed = words.shift();
-  const command = typed === undefined ? undefined : ALIASES[typed] ?? typed;
+  const command = typed !== undefined && Object.hasOwn(ALIASES, typed) ? ALIASES[typed] : typed;
   view.command = command ?? '';
   if (version || command === 'version') { view.command = 'version'; output({ version: VERSION }); return; }
   if (help || command === undefined || command === 'help') { process.stdout.write(HELP); return; }
@@ -503,7 +508,8 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   if (command === 'mcp') { if (words.length) fail('Usage: hivenote mcp'); await runMcp(config); return; }
   if (command === 'serve' || command === 'ui' || command === 'token' || command === 'backup') { await runOnThisMachine(command, words, config); return; }
 
-  const spec = NOTES[command];
+  // hasOwn: a word like "constructor" is not a command just because every object has one.
+  const spec = Object.hasOwn(NOTES, command) ? NOTES[command] : undefined;
   if (!spec) unknownCommand(command);
   if (words.length < spec.min || words.length > spec.max) fail(`Usage: hivenote ${spec.usage}`);
   const store = await openStore(config);

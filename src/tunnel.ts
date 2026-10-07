@@ -15,7 +15,12 @@ import { HiveNoteError } from './contract.js';
  * new start gets a new address, and workers have to connect again.
  */
 
-export interface Tunnel { stop(): void }
+export interface Tunnel {
+  /** Stops cloudflared, also while the tunnel is still opening. */
+  stop(): void;
+  /** The first address, once Cloudflare has the connection. Rejects when no tunnel could be opened. */
+  opened: Promise<string>;
+}
 export interface TunnelOptions {
   /** Told the first address, and every new one after cloudflared had to be started again. */
   address: (url: string, previous: string | undefined) => void;
@@ -113,8 +118,8 @@ async function cloudflared(say: TunnelOptions['say']): Promise<string> {
   return download(dataDirectory(), say);
 }
 
-export async function openTunnel(port: number, options: TunnelOptions): Promise<Tunnel> {
-  const program = await cloudflared(options.say);
+export function openTunnel(port: number, options: TunnelOptions): Tunnel {
+  let program = '';
   let child: ChildProcess | undefined;
   let stopped = false;
   let current: string | undefined;
@@ -172,15 +177,24 @@ export async function openTunnel(port: number, options: TunnelOptions): Promise<
 
   const stop = (): void => { stopped = true; child?.kill(); };
   process.once('exit', stop);
-  options.say('opening a Cloudflare tunnel');
-  // Cloudflare's service for quick tunnels is sometimes slow to answer; give it three tries.
-  for (let attempt = 1; current === undefined; attempt++) {
-    try { current = await start(); } catch (error) {
-      if (attempt === 3 || !(error instanceof HiveNoteError && error.code === 'tunnel_failed')) { stop(); throw error; }
-      options.say(`${error.message}; trying again`);
-      await sleep(2000);
+  // Ctrl+C while the tunnel is still opening must end it there, not start another try.
+  const halted = (): HiveNoteError => new HiveNoteError('cancelled', 'Stopped before the tunnel opened');
+  const open = async (): Promise<string> => {
+    program = await cloudflared(options.say);
+    options.say('opening a Cloudflare tunnel');
+    // Cloudflare's service for quick tunnels is sometimes slow to answer; give it three tries.
+    for (let attempt = 1; current === undefined; attempt++) {
+      if (stopped) throw halted();
+      try { current = await start(); } catch (error) {
+        if (stopped) throw halted();
+        if (attempt === 3 || !(error instanceof HiveNoteError && error.code === 'tunnel_failed')) { stop(); throw error; }
+        options.say(`${error.message}; trying again`);
+        await sleep(2000);
+      }
     }
-  }
-  options.address(current, undefined);
-  return { stop };
+    if (stopped) throw halted();
+    options.address(current, undefined);
+    return current;
+  };
+  return { stop, opened: open() };
 }

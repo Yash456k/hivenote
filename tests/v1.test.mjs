@@ -212,6 +212,27 @@ setInterval(() => {}, 1000);
   assert.equal(running(), false, 'the tunnel program was left running');
 });
 
+test('stopping serve public while the tunnel is still opening ends it, tunnel program included', { skip: process.platform === 'win32' }, async t => {
+  const dir = await sandbox(t, 'tunnel-stop');
+  // A cloudflared that never gets its tunnel, as when Cloudflare is slow to answer.
+  const fake = join(dir, 'cloudflared');
+  writeFileSync(fake, `#!${process.execPath}
+import('node:fs').then(fs => fs.writeFileSync(process.argv[1] + '.pid', String(process.pid)));
+console.error('INF Requesting new quick Tunnel on trycloudflare.com...');
+setInterval(() => {}, 1000);
+`, { mode: 0o755 });
+  const queen = spawn(process.execPath, [cli, 'serve', 'public', ':0', 'yes'], { env: { ...process.env, HIVENOTE_HOME: join(dir, 'home'), HIVENOTE_DB: join(dir, 'hive.db'), HIVENOTE_CLOUDFLARED: fake } });
+  t.after(() => queen.kill('SIGKILL'));
+  for (let i = 0; i < 100 && !existsSync(`${fake}.pid`); i++) await new Promise(resolve => setTimeout(resolve, 50));
+  const tunnel = Number(readFileSync(`${fake}.pid`, 'utf8'));
+  const exited = new Promise(resolve => queen.once('exit', resolve));
+  queen.kill('SIGINT');
+  assert.equal(await Promise.race([exited, new Promise(resolve => setTimeout(() => resolve('still running'), 5000))]), 0);
+  const running = () => { try { process.kill(tunnel, 0); return true; } catch { return false; } };
+  for (let i = 0; i < 50 && running(); i++) await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(running(), false, 'the tunnel program was left running');
+});
+
 test('a downloaded cloudflared that is not the expected file is deleted, never run', async t => {
   const dir = join(await sandbox(t, 'download'), 'data');
   const server = http.createServer((request, response) => { response.end('#!/bin/sh\necho not cloudflared\n'); });
