@@ -2,14 +2,21 @@ import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { HiveNoteError } from './contract.js';
 import { HttpStore, validateServerUrl } from './client.js';
-import { configDirectory, saveConfig } from './config.js';
+import { configDirectory, loadConfig, readToken, saveConfig } from './config.js';
 
 /**
  * `hivenote connect`: point this machine at a hive on another machine.
  * Asks for the URL and the token (typed hidden), checks they work, then saves
  * both. The token never appears in shell history or the process list, and the
  * user never has to manage a token file: HiveNote keeps it privately.
+ *
+ * A hive keeps its tokens when its address changes (a tunnel that started again, a queen
+ * moved to another machine), so a machine that is already connected is offered the token
+ * it has, and only types one if the queen at the new address turns that down.
  */
+
+/** How connect talks to the person; tests answer for them. */
+export interface Prompt { tty: boolean; ask(question: string, hidden: boolean): Promise<string> }
 
 /** Prompts go to stderr so stdout stays JSON. */
 function ask(question: string, hidden: boolean): Promise<string> {
@@ -51,9 +58,17 @@ function ask(question: string, hidden: boolean): Promise<string> {
   });
 }
 
-export async function connect(givenUrl: string | undefined): Promise<{ connected: string; entries: number }> {
-  if (givenUrl === undefined && !process.stdin.isTTY) throw new HiveNoteError('invalid_args', 'Pass the URL when piping the token: echo $TOKEN | hivenote connect URL');
-  const url = (givenUrl ?? await ask('Hive URL: ', false)).replace(/\/+$/u, '');
+/** The token this machine already holds, and the address it was saved for. */
+function savedToken(): { url: string; token: string } | undefined {
+  try {
+    const config = loadConfig();
+    return config.url && config.tokenFile ? { url: config.url, token: readToken(config) } : undefined;
+  } catch { return undefined; }
+}
+
+export async function connect(givenUrl: string | undefined, io: Prompt = { tty: process.stdin.isTTY === true, ask }): Promise<{ connected: string; entries: number }> {
+  if (givenUrl === undefined && !io.tty) throw new HiveNoteError('invalid_args', 'Pass the URL when piping the token: echo $TOKEN | hivenote connect URL');
+  const url = (givenUrl ?? await io.ask('Hive URL: ', false)).replace(/\/+$/u, '');
   const parsed = validateServerUrl(url);
   // The token travels with every request. Plain http is readable by anyone on the same network,
   // except on this machine or over Tailscale, which encrypts the traffic itself.
@@ -62,20 +77,37 @@ export async function connect(givenUrl: string | undefined): Promise<{ connected
   if (parsed.protocol === 'http:' && !['localhost', '127.0.0.1', '::1'].includes(host) && !tailscale) {
     process.stderr.write('hivenote: warning: this address uses plain http, so the token can be read by anyone on the same network. Use https (for example a Cloudflare tunnel) or Tailscale.\n');
   }
-  const token = await ask('Token: ', true);
-  if (!token) throw new HiveNoteError('invalid_args', 'A token is required. Create one on the queen: hivenote token add LABEL');
-
   // Check before saving, so a typo fails here rather than in the next agent command.
-  const probe = new HttpStore(url, token, { retries: 0 });
-  let total: number;
-  try {
-    ({ total } = await probe.call('list', { limit: 1 }) as { total: number });
-  } catch (error) {
-    // The address `hivenote serve public` prints is new to the whole internet.
-    if (error instanceof HiveNoteError && error.code === 'transport_error' && host.endsWith('.trycloudflare.com')) {
-      throw new HiveNoteError('transport_error', `Can't reach the hive at ${url}. A tunnel's address can take up to a minute to work everywhere, and it stops working when hivenote serve public stops on the queen. Check that it is still running there, then try again.`, 503);
+  const check = async (candidate: string): Promise<number> => {
+    try {
+      return (await new HttpStore(url, candidate, { retries: 0 }).call('list', { limit: 1 }) as { total: number }).total;
+    } catch (error) {
+      // The address `hivenote serve public` prints is new to the whole internet.
+      if (error instanceof HiveNoteError && error.code === 'transport_error' && host.endsWith('.trycloudflare.com')) {
+        throw new HiveNoteError('transport_error', `Can't reach the hive at ${url}. A tunnel's address can take up to a minute to work everywhere, and it stops working when hivenote serve public stops on the queen. Check that it is still running there, then try again.`, 503);
+      }
+      throw error;
     }
-    throw error;
+  };
+
+  let token: string | undefined;
+  let total = 0;
+  // Only a person at a terminal is offered the saved token, and only after saying yes:
+  // it is about to be sent to the address they just gave. A piped token is used as given.
+  const saved = io.tty ? savedToken() : undefined;
+  if (saved && /^(y|yes)?$/iu.test(await io.ask(`Use the token saved for ${saved.url}? [Y/n] `, false))) {
+    try {
+      total = await check(saved.token);
+      token = saved.token;
+    } catch (error) {
+      if (!(error instanceof HiveNoteError && error.status === 401)) throw error;
+      process.stderr.write(`hivenote: the queen at ${url} did not accept the saved token.\n`);
+    }
+  }
+  if (token === undefined) {
+    token = await io.ask('Token: ', true);
+    if (!token) throw new HiveNoteError('invalid_args', 'A token is required. Create one on the queen: hivenote token add LABEL');
+    total = await check(token);
   }
 
   const directory = configDirectory();

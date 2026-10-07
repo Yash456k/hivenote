@@ -73,7 +73,7 @@ hivenote status                                 # which hive, and whether it ans
 hivenote disconnect                             # back to this machine's own hive
 ```
 
-`connect` checks the URL and token before saving them, keeps the token in a private file (mode 600) in HiveNote's settings folder, and from then on every note and task command on that machine, including agents', uses the queen. `ui`, `serve`, `token` and `backup` only run on the machine that holds the hive; from a worker, open the queen's dashboard at her address instead. If the queen can't be reached, commands fail; they never quietly fall back to a local hive. `status` says which of these is wrong: the queen is down, the address isn't a queen, or the token was rejected.
+`connect` checks the URL and token before saving them, keeps the token in a private file (mode 600) in HiveNote's settings folder, and from then on every note and task command on that machine, including agents', uses the queen. `ui`, `serve`, `token` and `backup` only run on the machine that holds the hive; from a worker, open the queen's dashboard at her address instead. A machine that is already connected is offered the token it has: `hivenote connect NEW-ADDRESS` asks `Use the token saved for OLD-ADDRESS? [Y/n]`, and Enter means yes. A hive keeps its tokens when its address changes, so nothing has to be pasted again; if the queen at the new address turns the token down, `connect` asks for one as usual. The question is only asked in a terminal, since it sends the saved token to the address you gave; a piped token is used as given. If the queen can't be reached, commands fail; they never quietly fall back to a local hive. `status` says which of these is wrong: the queen is down, the address isn't a queen, or the token was rejected.
 
 **`serve public`** gives the queen an address on the internet without an account, a domain or an open port. It serves the hive on 127.0.0.1 and runs Cloudflare's `cloudflared` program, which connects out to Cloudflare and gets a random `https://….trycloudflare.com` address (a [quick tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/)). The command prints that address; workers use it with `hivenote connect`, and the dashboard is at the same address. Every request still needs a token.
 
@@ -92,6 +92,15 @@ ingress:
 ```
 
 With Tailscale, `tailscale serve --bg --https=8444 http://127.0.0.1:7391` gives the queen a private HTTPS address on your tailnet. An SSH forward works too: `ssh -L 7391:127.0.0.1:7391 QUEEN_HOST`, then connect to `http://127.0.0.1:7391`.
+
+**Moving the queen.** To make another machine the queen:
+
+1. On the old queen, run `hivenote backup hive.db`, then stop `hivenote serve`. The old queen has to stop first; two machines serving copies of one hive drift apart.
+2. Copy `hive.db` to the new machine and put it in place as that machine's database (the path is under [Scripts and environment](#scripts-and-environment)). If the new machine was a worker, run `hivenote disconnect` there first.
+3. On the new machine, run `hivenote serve` or `hivenote serve public`.
+4. On every worker, run `hivenote connect NEW-ADDRESS` and press Enter to keep the token it has. The copy carries the tokens, so they still work.
+
+The old queen can join as a worker too: `hivenote token add LABEL` on the new queen, then `hivenote connect NEW-ADDRESS` on the old one.
 
 **Versions.** The queen and its workers should run the same version. Every answer carries the queen's version, and a worker prints one warning when the two differ in their first two numbers. Update the queen first.
 

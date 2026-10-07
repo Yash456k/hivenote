@@ -107,7 +107,7 @@ If the machines aren't on the same network, the queen can open a tunnel to the i
 hivenote serve public                   # prints an https address that works from anywhere
 ```
 
-This starts a Cloudflare quick tunnel, downloading Cloudflare's `cloudflared` program the first time. There is no account to make and no port to open on the machine or the router. Workers connect to the address it prints, with a token as before. The address is random and lasts until the command stops; starting it again gives a new one, and workers connect again. Cloudflare gives quick tunnels no uptime guarantee, so a hive that has to stay at one address needs your own tunnel or Tailscale.
+This starts a Cloudflare quick tunnel, downloading Cloudflare's `cloudflared` program the first time. There is no account to make and no port to open on the machine or the router. Workers connect to the address it prints, with a token as before. The address is random and lasts until the command stops; starting it again gives a new one, and each worker runs `hivenote connect` with it, keeping the token it already has. Cloudflare gives quick tunnels no uptime guarantee, so a hive that has to stay at one address needs your own tunnel or Tailscale.
 
 Any other address works too: your LAN, Tailscale, or a tunnel you run. On a network you don't fully trust, and always across the internet, put it behind HTTPS (a Cloudflare tunnel works) or Tailscale, because plain HTTP sends the token unencrypted.
 

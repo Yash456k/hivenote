@@ -189,3 +189,35 @@ setInterval(() => {}, 1000);
   for (let i = 0; i < 50 && running(); i++) await new Promise(resolve => setTimeout(resolve, 100));
   assert.equal(running(), false, 'the tunnel program was left running');
 });
+
+test('connecting to a hive at its new address offers the token this machine already has', async t => {
+  const dir = await sandbox(t, 'reconnect');
+  const hive = join(dir, 'hive.db');
+  const moved = join(dir, 'moved.db');
+  await cliJson(['--db', hive, 'add', 'on-hive', 'Lives on the hive']);
+  const { token } = await cliJson(['--db', hive, 'token', 'add', 'laptop']);
+  const serve = db => {
+    const queen = spawn(process.execPath, [cli, 'serve', ':0'], { env: { ...process.env, HIVENOTE_DB: db } });
+    t.after(() => queen.kill());
+    return new Promise(resolve => queen.stdout.once('data', chunk => resolve(`http://127.0.0.1:${new URL(JSON.parse(String(chunk)).serving).port}`)));
+  };
+  // This test is the person at the laptop's terminal: it answers what connect asks.
+  const home = process.env.HIVENOTE_HOME;
+  process.env.HIVENOTE_HOME = join(dir, 'laptop');
+  t.after(() => { process.env.HIVENOTE_HOME = home; });
+  const { connect } = await import('../dist/connect.js');
+  const person = answers => { const asked = []; return { asked, tty: true, ask: async question => { asked.push(question); return answers.shift(); } }; };
+
+  const first = person([token]);
+  const old = await serve(hive);
+  await connect(old, first);
+  assert.deepEqual(first.asked, ['Token: ']);
+
+  // The queen moves: her hive is copied to another machine, which serves it at a new address.
+  await cliJson(['--db', hive, 'backup', moved]);
+  const second = person(['']);
+  const address = await serve(moved);
+  assert.equal((await connect(address, second)).connected, address);
+  assert.deepEqual(second.asked, [`Use the token saved for ${old}? [Y/n] `], 'Enter accepts, and no token is typed');
+  assert.deepEqual((await cliJson(['list'], { env: { HIVENOTE_HOME: join(dir, 'laptop') } })).notes.map(note => note.name), ['on-hive']);
+});
