@@ -2,7 +2,7 @@ import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, unlinkSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { clientParams, isMethod, MUTATIONS, HiveNoteError, type Actor, type Attribution, type Event, type Method, type Note, type Params, type Store } from './contract.js';
+import { byline, clientParams, isMethod, MUTATIONS, HiveNoteError, type Actor, type Attribution, type Event, type Method, type Note, type Params, type Previous, type Store } from './contract.js';
 import { openDatabase, storageError, transaction } from './database.js';
 import { due, id, integer, invalid, json, LIMITS, metadata, params as checkParams, status, STATUSES, text } from './validate.js';
 import { JSON_COLUMNS, NOTE_COLUMNS, toEvent, toNote, view, type Row } from './views.js';
@@ -27,7 +27,7 @@ const PARAMETERS: Record<Method, readonly string[]> = {
 };
 
 
-interface Receipt { note: Note; event_seq: number; op_id: string }
+interface Receipt { note: Note; event_seq: number; op_id: string; previous?: Previous }
 
 /**
  * Plain words are searched as words, so names like api-decisions and hosts like
@@ -125,7 +125,12 @@ export class SqliteStore implements Store {
       const note = createNote(p, who, now);
       // A name keeps one history: adding under a deleted note's name continues that note,
       // so its old versions stay reachable with history and restore.
-      const live = this.get('SELECT 1 FROM notes WHERE name=? AND deleted_at IS NULL', note.name);
+      const live = this.get('SELECT * FROM notes WHERE name=? AND deleted_at IS NULL', note.name);
+      if (live) {
+        const there = toNote(live);
+        const what = there.kind === 'task' ? `task (${there.status ?? 'todo'})` : 'note';
+        throw new HiveNoteError('conflict', `'${there.name}' already exists: a ${what} last changed by ${byline(there.last_attribution)}. Read it and add to it, or choose another name`, 409);
+      }
       const gone = live ? undefined : this.get('SELECT * FROM notes WHERE name=? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC, rowid DESC LIMIT 1', note.name);
       if (gone) {
         const before = toNote(gone);
@@ -138,13 +143,18 @@ export class SqliteStore implements Store {
     let note = this.find(p, method === 'restore');
 
     let eventKind = method as string;
+    let previous: Previous | undefined;
     switch (method) {
       case 'append': text(p.body, 'body', LIMITS.content); break;
       case 'edit': this.applyEdit(note, p); break;
       case 'replace': applyReplace(note, p); break;
       case 'delete': note.deleted_at = now; note.claimed_by = null; note.claim_expires_at = null; break;
       case 'restore': note = this.restored(note, p.rev); break;
-      case 'update_task': applyTaskUpdate(note, p); break;
+      case 'update_task':
+        // Marking never locks, so the answer says whose state was replaced; the caller can then think again.
+        if (p.status !== undefined) previous = { status: note.status, by: byline(note.last_attribution), at: note.updated_at };
+        applyTaskUpdate(note, p);
+        break;
       default: invalid('Unsupported mutation');
     }
 
@@ -160,6 +170,7 @@ export class SqliteStore implements Store {
       this.save(note);
     }
     const receipt = this.record(note, eventKind, p, who, now);
+    if (previous) receipt.previous = previous;
     if (method === 'append') this.index(note);
     return receipt;
   }
@@ -172,7 +183,8 @@ export class SqliteStore implements Store {
     // A revision should mean something changed.
     if (replacement === old) invalid('new_str is identical to old_str; nothing would change');
     const first = note.content.indexOf(old);
-    if (first < 0 || note.content.indexOf(old, first + 1) >= 0) this.conflict(note, 'old_str must match exactly once in current content');
+    if (first < 0) this.conflict(note, 'The old text is not in the note as it stands now. Here is the note; redo the edit against it');
+    if (note.content.indexOf(old, first + 1) >= 0) this.conflict(note, 'The old text is in the note more than once. Give more of the text around it, so it matches one place');
     note.content = text(note.content.slice(0, first) + replacement + note.content.slice(first + old.length), 'content', LIMITS.content, true);
   }
 
@@ -262,6 +274,7 @@ export class SqliteStore implements Store {
     };
   }
 
+  /** Notes with the latest activity first (a progress line counts), so what is being worked on leads. */
   private list(p: Params): unknown {
     const { limit, offset } = this.page(p);
     const shape = view(p.detail);
@@ -279,8 +292,13 @@ export class SqliteStore implements Store {
     }
     const clause = where.join(' AND ');
     const total = Number(this.get(`SELECT count(*) AS n FROM notes WHERE ${clause}`, ...args)?.n);
-    const notes = this.all(`SELECT * FROM notes WHERE ${clause} ORDER BY name,id LIMIT ? OFFSET ?`, ...args, limit, offset).map(row => shape(toNote(row)));
-    return { notes, total, offset, has_more: offset + notes.length < total };
+    const notes = this.all(`SELECT * FROM notes WHERE ${clause} ORDER BY activity_at DESC,name,id LIMIT ? OFFSET ?`, ...args, limit, offset).map(row => shape(toNote(row)));
+    return { notes, total, offset, has_more: offset + notes.length < total, seq: this.seq() };
+  }
+
+  /** The number of the hive's latest change. An agent hands it back to ask what happened after. */
+  private seq(): number {
+    return Number(this.get('SELECT max(seq) AS n FROM events')?.n ?? 0);
   }
 
   /** Full notes by IDs or by names, plus each note's latest 20 progress entries. */
@@ -316,7 +334,7 @@ export class SqliteStore implements Store {
       updates.push(...recent.reverse());
     }
     updates.sort((a, b) => a.seq - b.seq);
-    return { notes, missing, updates, updates_has_more, ...(too_big.length ? { too_big } : {}) };
+    return { notes, missing, updates, updates_has_more, ...(too_big.length ? { too_big } : {}), seq: this.seq() };
   }
 
   private search(p: Params): unknown {

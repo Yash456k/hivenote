@@ -60,10 +60,10 @@ On one machine there is nothing to run: the hive is a single SQLite file on your
 | `hivenote edit NAME "old text" "new text"` | Change one passage |
 | `hivenote append NAME "progress"` | Add progress without rewriting the note |
 | `hivenote task NAME "description"` | A new task |
-| `hivenote mark NAME doing` | Move a task along the board (`todo`, `doing`, `done`, `cancelled`) |
+| `hivenote mark NAME doing` | Move a task along the board (`todo`, `doing`, `done`, `cancelled`); add `"what you did"` to leave a progress line with it |
 | `hivenote wait NAME done` | Block until another agent finishes it (`wait NAME` until it is added or changes, `wait` until anything does) |
 
-Agents get JSON; when you type a command yourself, you get a readable view. `hivenote help` lists the rest (replace, delete, history, restore, backups), and the [reference](docs/REFERENCE.md) covers all of it.
+Agents get short JSON with the parts they act on (`--full` for the whole stored record); when you type a command yourself, you get a readable view. `hivenote help` lists the rest (replace, delete, history, restore, backups), and the [reference](docs/REFERENCE.md) covers all of it.
 
 ## Run it yourself
 

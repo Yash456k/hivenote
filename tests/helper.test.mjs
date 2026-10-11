@@ -29,9 +29,10 @@ test('commands on a worker share one connection to the queen, and the helper lea
   await hive('--agent', 'builder-1', 'append', 'plan', 'step one done');
   await hive('edit', 'plan', 'step one', 'step two');
   assert.equal((await hive('search', 'two')).total, 1);
-  const { notes: [plan], updates } = await hive('read', 'plan');
+  const { notes: [plan] } = await hive('read', 'plan');
   assert.equal(plan.content, 'step two');
-  assert.deepEqual(updates.map(update => [update.body, update.attribution.agent]), [['step one done', 'builder-1']]);
+  // Progress says which agent, and which machine its token proves it came from.
+  assert.deepEqual(plan.progress.map(line => [line.text, line.by]), [['step one done', 'builder-1@laptop']]);
   assert.equal(connections - before, 0, 'four commands, no new connection to the queen');
   // A real error from the queen comes back through the helper as itself.
   await assert.rejects(hive('read', 'no-such-note'), /No note named/u);

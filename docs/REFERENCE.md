@@ -36,19 +36,34 @@ Shell habits are understood: `ls` is `list`, `cat` is `read`, `grep` and `find` 
 hivenote task build-api "POST /bookings with conflict checks"
 hivenote tasks                                  # the board
 hivenote mark build-api doing                   # todo, doing, done or cancelled
+hivenote mark build-api done "what I did"       # leave a progress line and mark it, in one command
 hivenote wait build-api done                    # until it's done
 hivenote wait build-api                         # until it changes at all, including progress
 hivenote wait                                   # until anything in the hive changes
 hivenote wait build-api done 30m                # hold on for 30 minutes (90s, 2h and forever work too)
+hivenote wait --since 47                        # count changes from an earlier answer's "seq", not from now
 ```
 
 A task is a note with a status. The board shows each task's status, who changed it last and how long ago, such as `[doing · codex · 2h ago]`. That is the whole coordination model: nothing is locked, and nothing expires. A task that has said `doing` for hours may belong to an agent that stopped; whoever sees it decides what to do.
 
-`wait` checks every 5 seconds for up to 9 minutes, then exits with an error, which keeps it under the 10-minute limit agents such as Claude Code put on one command. A script or service with no such limit can end the command with its own: `90s`, `30m`, `2h`, or `forever` to never give up. Waiting for a status checks how things stand first, so a loop that waits again after a timeout misses nothing; the limit word is always the last one, so a note that is itself named `forever` is waited for as `hivenote wait forever forever`. If the note doesn't exist yet, it says so and holds on until someone adds it. With no name, it returns as soon as anything in the hive changes and lists each change: the note, what happened, and who did it. It follows the note it found first, so a different task created later under the same name never counts. If the queen restarts or the network drops while waiting, it keeps checking until its time is up. It only reads, so `hivenote wait build-api done && your-command` is how a script carries on afterwards.
+Because nothing is locked, an agent can act on an old look at the board. So `mark` says what the task was before (`"was":"doing"`), and adds a `heads_up` when the state it replaced was set by another agent: a finished task reopened, a task someone is on marked `doing` again or set back to `todo`. The mark still happens; the agent that made it is told at once, with the command that puts it back.
+
+`wait` checks every 5 seconds for up to 9 minutes, then exits with an error, which keeps it under the 10-minute limit agents such as Claude Code put on one command. A script or service with no such limit can end the command with its own: `90s`, `30m`, `2h`, or `forever` to never give up. Waiting for a status checks how things stand first, so a loop that waits again after a timeout misses nothing; the limit word is always the last one, so a note that is itself named `forever` is waited for as `hivenote wait forever forever`. If the note doesn't exist yet, it says so and holds on until someone adds it. With no name, it returns as soon as anything in the hive changes and lists each change: the note, what happened, and who did it. It follows the note it found first, so a different task created later under the same name never counts. If the queen restarts or the network drops while waiting, it keeps checking until its time is up. It only reads, so `hivenote wait build-api done && your-command` is how a script carries on afterwards. When its time is up, the error says where the task stands: `'build-api' did not reach done within 45 seconds. It is doing, last changed 3m ago by codex@laptop`.
+
+### Coming back to notes you have read
+
+An agent reads a task, works for a while, and comes back. Reading the notes again sends all of it again, and a `wait` begun now sleeps through whatever changed in between. Every `list`, `tasks`, `read` and `wait` answer therefore ends with `"seq"`, the number of the hive's latest change. A `read` also gives the command ready to run, as `"only_new":"hivenote read build-api contract --since 47"`. Handed back with `--since`:
+
+```sh
+hivenote read build-api contract --since 47     # only what changed after 47
+hivenote wait --since 47                        # answers at once if anything changed after 47
+```
+
+`read --since` gives, for each note that changed, its status, who changed it and how long ago, and its new progress lines. If its text was rewritten, it gives the passages that changed as `text_changes`, a list of `{was, now}` (or `{after, added}` for lines that were only added), or the whole text when that is shorter. Notes with nothing new are named under `unchanged`. `wait NAME --since` answers in the same form, and names under `also_changed` any other notes that changed since then, so an agent watching one task hears that the contract moved. A queen older than 0.5 doesn't send `seq` with `read` and `list`; `--since` works there with a number from `wait`.
 
 ## Labels
 
-Every change records who made it. When HiveNote runs inside Claude Code, Codex or Hermes, it labels changes `claude-code`, `codex` or `hermes` on its own, from their environment variables. When several agents share one machine, give each a role with `--agent builder-1`. Labels are self-reported, for telling agents apart, not for security.
+Every change records who made it. When HiveNote runs inside Claude Code, Codex or Hermes, it labels changes `claude-code`, `codex` or `hermes` on its own, from their environment variables. When several agents share one machine, give each a role with `--agent builder-1`. Labels are self-reported, for telling agents apart, not for security. On a queen, a change also carries the name of the token it came in with, which is checked, so names read `codex@laptop`: the agent's own label, then the machine.
 
 ## One queen, many workers
 
@@ -117,7 +132,7 @@ To turn the helper off on a machine, add a line to `config.json` in HiveNote's s
 
 The old queen can join as a worker too: `hivenote token add LABEL` on the new queen, then `hivenote connect NEW-ADDRESS` on the old one.
 
-**Versions.** The queen and its workers should run the same version. Every answer carries the queen's version, and a worker prints one warning when the two differ in their first two numbers. Update the queen first.
+**Versions.** The queen and its workers should run the same version. Every answer carries the queen's version, and a worker prints a warning when the two differ in their first two numbers, once a day and not on every command. Update the queen first.
 
 ## Dashboard
 
@@ -127,7 +142,18 @@ The queen's `serve` also serves the dashboard at `/`. There, each browser pastes
 
 ## Scripts and environment
 
-Agents and scripts always get JSON: results on stdout, and errors on stderr as `{"error":{"code","message","status"}}` with a nonzero exit. A person typing in a terminal gets a readable view instead; `--json` forces JSON there too, and `NO_COLOR` turns off bold and dim text.
+Agents and scripts always get JSON: results on stdout, and errors on stderr as `{"error":{"code","message","status"}}` with a nonzero exit.
+
+That JSON holds what an agent acts on, not everything the hive stores:
+
+- `read` and `wait NAME` give each note as `name`, `description`, `kind`, `status`, `updated_by`, `ago`, `content` and `progress`, a list of `{by, ago, text}`.
+- `list`, `tasks` and `search` give `name`, `description`, `kind`, `ago`, and for tasks `status` and `updated_by`. `list` and `tasks` put the latest activity first, and their `ago` is since that activity, a progress line included.
+- `history` gives one line per change: `version`, `kind`, `by`, `ago`, and `text` for a progress line.
+- A write answers with `{"ok", "note"}`, plus `version` after a change to the text, `status` and `was` after `mark`, and `undo` after `delete`.
+- `ago` is an age, such as `40s`, `3m`, `2h` or `5d`. An agent seldom knows what time it is, so an age is what it can act on, and a timestamp costs about five times as many tokens. The exact times are in `--full`.
+- `list`, `tasks`, `read` and `wait` end with `seq`, for `--since`; `read` adds `only_new`, that command written out.
+
+`--full` prints the stored record instead: ids, every timestamp, the full attribution of each change, a copy of the note in each history entry, and the whole note after a write. A script that reads any of those adds `--full`. A person typing in a terminal gets a readable view instead; `--json` forces JSON there too, and `NO_COLOR` turns off bold and dim text.
 
 | Variable | What it does |
 |---|---|

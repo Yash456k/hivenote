@@ -1,11 +1,14 @@
+import { byline, type Attribution } from './contract.js';
+import { headsUp } from './lean.js';
+
 /**
  * What a person sees when they run hivenote in a terminal. Agents and scripts always get
  * JSON; the CLI only calls this when stdout is a terminal and no agent is detected.
  */
 
-interface Brief { name: string; description: string; kind: string; status?: string | null; snippet?: string; updated_at?: string; updated_by?: string }
+interface Brief { name: string; description: string; kind: string; status?: string | null; snippet?: string; updated_at?: string; activity_at?: string; updated_by?: string }
 interface Note extends Brief { id: string; content: string; rev: number; last_attribution?: Who }
-interface Who { agent?: string; device?: string }
+type Who = Attribution;
 interface Change { note: string; kind: string; by: string; at: string; body?: string; status?: string }
 interface Event { note_id: string; kind: string; revision: number | null; body: string | null; timestamp: string; attribution?: Who }
 
@@ -21,13 +24,14 @@ function ago(timestamp: string): string {
   return 'just now';
 }
 
-const who = (by: Who | undefined): string => by?.agent ?? by?.device ?? 'someone';
+const who = byline;
 const notes = (count: unknown): string => `${String(count)} note${count === 1 ? '' : 's'}`;
 
 /** For tasks, the sticker: status, who changed it last, and how long ago. */
 function sticker(note: Brief): string {
   if (note.kind !== 'task') return '';
-  const parts = [note.status ?? 'todo', note.updated_by, note.updated_at && ago(note.updated_at)].filter(Boolean);
+  const when = note.activity_at ?? note.updated_at;
+  const parts = [note.status ?? 'todo', note.updated_by, when && ago(when)].filter(Boolean);
   return dim(`[${parts.join(' · ')}]`);
 }
 
@@ -102,7 +106,10 @@ export function pretty(command: string, value: unknown): string {
     case 'describe': return `Changed the description of ${bold(note!.name)}`;
     case 'delete': return `Deleted ${bold(note!.name)} ${dim(`(undo: hivenote restore ${note!.name} ${note!.rev - 1})`)}`;
     case 'restore': return `Restored ${bold(note!.name)}`;
-    case 'mark': return `Marked ${bold(note!.name)} ${note!.status ?? 'todo'}`;
+    case 'mark': {
+      const warning = headsUp(v as unknown as Parameters<typeof headsUp>[0]);
+      return `Marked ${bold(note!.name)} ${note!.status ?? 'todo'}${warning ? `\n${dim(warning)}` : ''}`;
+    }
     case 'status': return v.hive === 'queen'
       ? `Connected to the queen at ${String(v.url)}\n${dim(`${notes(v.notes)} · queen ${String(v.queen_version)} · this machine ${String(v.this_version)} · ${String(v.round_trip_ms)} ms · connection ${String(v.connection)}`)}`
       : `Using this machine's own hive at ${String(v.db)}\n${dim(`${notes(v.notes)} · version ${String(v.version)}`)}`;

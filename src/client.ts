@@ -1,3 +1,6 @@
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { configDirectory } from './config.js';
 import { clientParams, isMethod, HiveNoteError, VERSION, type Method, type Params, type Store } from './contract.js';
 
 export interface HttpStoreOptions {
@@ -8,11 +11,19 @@ export interface HttpStoreOptions {
   quiet?: boolean;
 }
 
-/** Warn when this machine and the hive differ in major or minor version; patches stay quiet. Callers say it once. */
+/**
+ * Warn when this machine and the hive differ in major or minor version; patches stay quiet.
+ * An agent starts a new process for every command, so the warning is given once a day, not on each one.
+ */
 export function warnOnOtherVersion(server: string, hive: string): void {
   const release = (version: string): string => version.split('.').slice(0, 2).join('.');
   if (release(server) === release(VERSION)) return;
+  const said = join(configDirectory(), 'version-notice'), what = `${VERSION} ${server} ${hive}`;
+  try {
+    if (readFileSync(said, 'utf8') === what && Date.now() - statSync(said).mtimeMs < 86_400_000) return;
+  } catch { /* not said yet */ }
   process.stderr.write(`hivenote: this machine runs ${VERSION} but the hive at ${hive} runs ${server}. Update the older one with: npm install -g hivenote@latest\n`);
+  try { mkdirSync(dirname(said), { recursive: true }); writeFileSync(said, what); } catch { /* said again next time */ }
 }
 export function validateServerUrl(value: string): URL {
   let url: URL;

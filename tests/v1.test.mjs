@@ -29,7 +29,8 @@ test('wait holds on for as long as its last word says', async t => {
   const started = Date.now();
   const short = await run(process.execPath, [cli, '--db', db, 'wait', 'ship-it', 'done', '1s']);
   assert.equal(JSON.parse(short.stderr).error.code, 'timeout');
-  assert.match(short.stderr, /within 1 seconds/u);
+  // The answer says where the task stands, so the one waiting need not read it to find out.
+  assert.match(short.stderr, /did not reach done within 1 seconds\. It is todo, last changed \d+s ago/u);
   assert.ok(Date.now() - started < 8000, 'gave up after about a second, not nine minutes');
   // forever has no limit, and still wakes the moment the task is done.
   const forever = run(process.execPath, [cli, '--db', db, 'wait', 'ship-it', 'done', 'forever']);
@@ -57,7 +58,7 @@ test('wait wakes when another process marks a task done, and shows its progress'
   const woke = JSON.parse(result.stdout);
   assert.equal(woke.reason, 'status');
   assert.equal(woke.note.status, 'done');
-  assert.deepEqual(woke.updates.map(update => update.body), ['endpoints done']);
+  assert.deepEqual(woke.note.progress.map(line => line.text), ['endpoints done']);
 });
 
 test('edits and replacements that change nothing are rejected instead of creating revisions', async t => {
@@ -137,9 +138,9 @@ test('writes are labeled with the agent running the command, innermost agent fir
   assert.equal(detectAgent({ HERMES_SESSION_ID: 'x', CLAUDECODE: '1' }), 'hermes');
   assert.equal(detectAgent({}), undefined);
   const db = join(await sandbox(t, 'label'), 'notes.db');
-  const created = await cliJson(['--db', db, 'add', 'labeled', 'x'], { env: { CODEX_CI: '1' } });
+  const created = await cliJson(['--db', db, '--full', 'add', 'labeled', 'x'], { env: { CODEX_CI: '1' } });
   assert.equal(created.note.last_attribution.agent, 'codex');
-  const explicit = await cliJson(['--db', db, '--agent', 'me', 'add', 'explicit', 'x'], { env: { CODEX_CI: '1' } });
+  const explicit = await cliJson(['--db', db, '--full', '--agent', 'me', 'add', 'explicit', 'x'], { env: { CODEX_CI: '1' } });
   assert.equal(explicit.note.last_attribution.agent, 'me');
 });
 
@@ -149,13 +150,69 @@ test('a task goes by name from start to done, and kebab-case names are searchabl
   await cliJson(['--db', db, 'mark', 'build-api', 'doing']);
   await cliJson(['--db', db, 'append', 'build-api', 'Endpoint works']);
   const done = await cliJson(['--db', db, 'mark', 'build-api', 'done']);
-  assert.equal(done.note.status, 'done');
+  assert.equal(done.status, 'done');
   // Plain words are searched as words, so kebab-case names are found.
   assert.equal((await cliJson(['--db', db, 'search', 'build-api'])).total, 1);
   const read = await cliJson(['--db', db, 'read', 'build-api']);
-  assert.equal(read.updates[0].body, 'Endpoint works');
+  assert.equal(read.notes[0].progress[0].text, 'Endpoint works');
   const missing = await run(process.execPath, [cli, '--db', db, 'append', 'nope', 'x']);
   assert.match(missing.stderr, /No note named 'nope'/u);
+});
+
+test('a mark that replaces a state another agent set says whose, so an old look at the board is caught', async t => {
+  const db = join(await sandbox(t, 'heads-up'), 'notes.db');
+  const as = (agent, ...words) => cliJson(['--db', db, '--agent', agent, ...words]);
+  await as('planner', 'task', 'backend', 'Build the backend');
+  assert.equal((await as('builder', 'mark', 'backend', 'doing')).heads_up, undefined);
+  assert.match((await as('reviewer', 'mark', 'backend', 'doing')).heads_up, /builder marked this doing/u);
+  await as('builder', 'mark', 'backend', 'done');
+  const reopened = await as('planner', 'mark', 'backend', 'todo');
+  assert.equal(reopened.was, 'done');
+  assert.match(reopened.heads_up, /was done \(builder, \d+s ago\) and you have reopened it.*hivenote mark backend done/u);
+});
+
+test('an agent coming back is shown only what is new, and a wait counts from where it last looked', async t => {
+  const db = join(await sandbox(t, 'since'), 'notes.db');
+  const as = (agent, ...words) => cliJson(['--db', db, '--agent', agent, ...words]);
+  await as('planner', 'task', 'backend', 'Build the backend', 'Two endpoints');
+  await as('planner', 'add', 'contract', 'The public contract', 'JSON over HTTP');
+  const first = await as('planner', 'read', 'backend', 'contract');
+  assert.equal(first.notes.length, 2);
+  assert.deepEqual((await as('planner', 'list')).notes.map(note => note.name), ['contract', 'backend'], 'the newest first');
+
+  // The builder finishes while the planner is busy elsewhere: one command leaves the progress line and marks it.
+  await as('builder', 'append', 'contract', 'Added a rate limit');
+  await as('builder', 'mark', 'backend', 'done', 'Both endpoints pass');
+  const waited = await as('planner', 'wait', 'backend', 'done', '--since', String(first.seq));
+  assert.deepEqual([waited.note.content, waited.note.progress.length], [undefined, 1], 'a wait told where the agent last looked shows only what is new');
+  assert.deepEqual(waited.also_changed, ['contract'], 'and names what else changed while it watched one task');
+
+  const news = await as('planner', 'read', 'backend', 'contract', '--since', String(first.seq));
+  assert.equal(news.unchanged, undefined);
+  assert.equal(news.notes[0].status, 'done');
+  assert.equal(news.notes[0].content, undefined, 'its text was not rewritten, so it is not sent again');
+  assert.deepEqual(news.notes[0].progress.map(line => [line.by, line.text]), [['builder', 'Both endpoints pass']]);
+  assert.deepEqual((await as('planner', 'list')).notes.map(note => note.name), ['backend', 'contract'], 'a progress line brings its task to the top');
+
+  // A wait that began now would sleep through those changes. Counted from the earlier look, it answers at once.
+  const woke = await as('planner', 'wait', '--since', String(first.seq), '5s');
+  assert.deepEqual(woke.changes.map(change => [change.note, change.kind]), [['contract', 'append'], ['backend', 'append'], ['backend', 'update_task']]);
+  assert.equal(woke.seq, news.seq);
+
+  // A rewritten note comes back as the passage that changed, not as the whole text to compare by eye.
+  await cliJson(['--db', db, '--agent', 'builder', 'replace', 'contract', '-'], { input: 'JSON over HTTP\nRate limit: 60 a minute\nTimes in UTC\nErrors are JSON\n' });
+  const { seq, only_new } = await as('planner', 'read', 'contract');
+  assert.equal(only_new, `hivenote read contract --since ${seq}`);
+  await as('builder', 'edit', 'contract', '60 a minute', '120 a minute');
+  const edited = await as('planner', 'read', 'contract', '--since', String(seq));
+  assert.deepEqual(edited.notes[0].text_changes, [{ was: 'Rate limit: 60 a minute', now: 'Rate limit: 120 a minute' }]);
+});
+
+test('adding under a name that is taken says what is already there', async t => {
+  const db = join(await sandbox(t, 'taken'), 'notes.db');
+  await cliJson(['--db', db, '--agent', 'planner', 'task', 'backend', 'Build the backend']);
+  const again = await run(process.execPath, [cli, '--db', db, 'task', 'backend', 'Backend work']);
+  assert.match(JSON.parse(again.stderr).error.message, /'backend' already exists: a task \(todo\) last changed by planner/u);
 });
 
 test('a worker keeps waiting when the queen restarts mid-wait', async t => {

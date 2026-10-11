@@ -21,6 +21,25 @@ export interface Note {
   created_at: string; updated_at: string; activity_at: string; deleted_at: string|null;
   last_attribution: Attribution; last_activity_attribution: Attribution;
 }
+/** What a task said before its status was changed: the state the change replaced. */
+export interface Previous { status: Note['status']; by: string; at: string }
+/**
+ * Who made a change, in one word: the agent, and the machine it came from when a token
+ * proves which machine that is. Five Codex agents on five machines are then five names.
+ */
+export function byline(who: Attribution | undefined): string {
+  if (!who) return 'someone';
+  if (!who.agent) return who.device;
+  return who.verified && who.device !== who.agent ? `${who.agent}@${who.device}` : who.agent;
+}
+/** How long ago something happened, in one word: 40s, 3m, 2h, 5d. */
+export function age(from: string, to: string | number = Date.now()): string {
+  const seconds = Math.max(0, Math.round(((typeof to === 'number' ? to : Date.parse(to)) - Date.parse(from)) / 1000));
+  for (const [size, unit] of [[86400, 'd'], [3600, 'h'], [60, 'm']] as const) {
+    if (seconds >= size) return `${Math.floor(seconds / size)}${unit}`;
+  }
+  return `${seconds}s`;
+}
 export interface Event {
   seq: number; note_id: string; kind: string; revision: number|null;
   snapshot: Note|null; body: string|null; op_id: string; attribution: Attribution; timestamp: string;
@@ -45,8 +64,9 @@ export function clientParams(method: Method, params: Params = {}): Params {
 }
 
 /* Wire contract (notes are named by `note`, their name; `id` is still accepted from older clients) (all optional fields omitted, not undefined):
- list {offset?,limit?,kind?,status?,detail?:'brief'|'full'} => {notes: BriefNote[] (or Omit<Note,'content'>[] when full), total,offset,has_more}
- read {ids?:string[],names?:string[]} exactly one selector => {notes:Note[],missing:string[]}
+ list {offset?,limit?,kind?,status?,detail?:'brief'|'full'} => {notes: BriefNote[] (or Omit<Note,'content'>[] when full), total,offset,has_more,seq}, latest activity first
+ read {ids?:string[],names?:string[]} exactly one selector => {notes:Note[],missing:string[],seq}
+ seq is the number of the hive's latest change when the answer was made: changes {since:seq} gives what came after.
  search {query,offset?,limit?,detail?} => {notes:(BriefNote&{snippet})[],total,offset,has_more}
  create {id?:UUID,name,description,content,kind?,metadata?,status?,due_at?,op_id}
  edit {note|id,old_str,new_str,op_id}; replace {note|id,content?,name?,description?,metadata?,op_id}
@@ -57,5 +77,6 @@ export function clientParams(method: Method, params: Params = {}): Params {
  changes {since?:seq,limit?} | {tail:1-100} => {events:Event[],cursor,has_more}
  update_task {note|id,status?,due_at?:ISO|null,metadata?,op_id}
  Every mutation returns immutable {note:Note,event_seq:number,op_id:string}; append leaves rev unchanged.
+ update_task with a status also returns previous:{status,by,at}, what the task said before.
  All errors HiveNoteError; conflict 409 details {current:Note}. Metadata/references inert.
  */

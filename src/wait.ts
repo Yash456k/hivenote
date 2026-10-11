@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from 'node:timers/promises';
-import { HiveNoteError, type Event, type Note, type Store } from './contract.js';
+import { age, byline, HiveNoteError, type Event, type Note, type Store } from './contract.js';
 
 /**
  * Block until a note changes, a task reaches a status, or anything in the hive changes.
@@ -20,6 +20,8 @@ export interface WaitOptions {
   /** 0 waits forever. */
   timeoutSeconds: number;
   intervalMs: number;
+  /** Count changes after this point in the hive's feed (a `seq` from an earlier answer), not after now. */
+  since?: number;
   /** Told once when the note doesn't exist yet, so a mistyped name is seen straight away. */
   notice?: (message: string) => void;
 }
@@ -30,6 +32,7 @@ export interface WaitResult {
   waited_ms: number;
   note: Note;
   updates: Event[];
+  seq?: number;
 }
 
 /** One line of what happened in the hive: which note, what was done to it, and by whom. */
@@ -41,7 +44,23 @@ export interface Change { note: string; kind: string; by: string; at: string; bo
  */
 export const WAIT_DEFAULTS = { timeoutSeconds: 540, intervalMs: 5000 } as const;
 
-interface ReadResult { notes: Note[]; updates: Event[] }
+interface ReadResult { notes: Note[]; updates: Event[]; seq?: number }
+
+/**
+ * Everything that happened in the hive after `since`, oldest first. Past 1,000 changes it
+ * stops and says so; the caller is better off reading the notes as they stand.
+ */
+export async function changesSince(store: Store, since: number): Promise<{ events: Event[]; seq: number; complete: boolean }> {
+  const events: Event[] = [];
+  let cursor = since;
+  for (let page = 0; page < 10; page++) {
+    const feed = await store.call('changes', { since: cursor, limit: 100 }) as { events: Event[]; cursor: number; has_more: boolean };
+    events.push(...feed.events);
+    cursor = feed.cursor;
+    if (!feed.has_more) return { events, seq: cursor, complete: true };
+  }
+  return { events, seq: cursor, complete: false };
+}
 
 /** The hive could not be reached this time (a restart, a network blip); worth checking again. */
 function unreachable(error: unknown): boolean {
@@ -61,6 +80,7 @@ export async function waitForNote(store: Store, options: WaitOptions): Promise<W
   let baseline: string | undefined;
   // A note that doesn't exist yet is waited for; someone adding it is the change.
   let missing = false;
+  let last: Note | undefined;
 
   for (let first = true; ; first = false) {
     if (!first) {
@@ -82,26 +102,40 @@ export async function waitForNote(store: Store, options: WaitOptions): Promise<W
       continue;
     }
 
+    last = note;
+    const answer = (reason: WaitResult['reason']): WaitResult => ({ reason, waited_ms: Date.now() - started, note, updates: result.updates, ...(result.seq === undefined ? {} : { seq: result.seq }) });
+
     if (!pinned) {
       if (options.status !== undefined && note.kind !== 'task') throw new HiveNoteError('validation_error', `'${options.name}' is a note, not a task, so it has no status to wait for`);
       pinned = note.id;
       baseline = fingerprint(note);
-      if (options.status !== undefined && note.status === options.status) return { reason: 'status', waited_ms: Date.now() - started, note, updates: result.updates };
-      if (options.status === undefined && missing) return { reason: 'added', waited_ms: Date.now() - started, note, updates: result.updates };
+      if (options.status !== undefined && note.status === options.status) return answer('status');
+      if (options.status === undefined && missing) return answer('added');
+      // A change made after the caller last looked, but before this wait began, still counts.
+      if (options.status === undefined && options.since !== undefined) {
+        const { events } = await changesSince(store, options.since);
+        if (events.some(event => event.note_id === note.id)) return answer('changed');
+      }
       continue;
     }
     const done = options.status !== undefined ? note.status === options.status : fingerprint(note) !== baseline;
-    if (done) return { reason: options.status !== undefined ? 'status' : 'changed', waited_ms: Date.now() - started, note, updates: result.updates };
+    if (done) return answer(options.status !== undefined ? 'status' : 'changed');
   }
-  throw new HiveNoteError('timeout', pinned ? `Nothing changed within ${options.timeoutSeconds} seconds` : `'${options.name}' was not added within ${options.timeoutSeconds} seconds`, 408);
+  // Say where it stands, so the caller need not read it to find out.
+  const within = `within ${options.timeoutSeconds} seconds`;
+  if (!last) throw new HiveNoteError('timeout', `'${options.name}' was not added ${within}`, 408);
+  const stands = `last changed ${age(last.activity_at)} ago by ${byline(last.last_activity_attribution)}`;
+  throw new HiveNoteError('timeout', options.status !== undefined
+    ? `'${options.name}' did not reach ${options.status} ${within}. It is ${last.status ?? 'todo'}, ${stands}`
+    : `Nothing changed in '${options.name}' ${within}. It was ${stands}`, 408);
 }
 
 /** Block until anything in the hive changes, and say what did. */
-export async function waitForAnyChange(store: Store, options: Pick<WaitOptions, 'timeoutSeconds' | 'intervalMs'>): Promise<{ reason: 'changed'; waited_ms: number; changes: Change[] }> {
+export async function waitForAnyChange(store: Store, options: Pick<WaitOptions, 'timeoutSeconds' | 'intervalMs' | 'since'>): Promise<{ reason: 'changed'; waited_ms: number; changes: Change[]; seq: number }> {
   const started = Date.now();
   const deadline = options.timeoutSeconds === 0 ? Infinity : started + options.timeoutSeconds * 1000;
   // Where the hive's feed of changes stood when the wait began.
-  let cursor: number | undefined;
+  let cursor = options.since;
 
   for (let first = true; ; first = false) {
     if (!first) {
@@ -110,7 +144,9 @@ export async function waitForAnyChange(store: Store, options: Pick<WaitOptions, 
     }
     let feed: { events: Event[]; cursor: number };
     try {
-      feed = await store.call('changes', cursor === undefined ? { tail: 1 } : { since: cursor, limit: 100 }) as typeof feed;
+      feed = cursor === undefined
+        ? await store.call('changes', { tail: 1 }) as typeof feed
+        : await changesSince(store, cursor).then(all => ({ events: all.events, cursor: all.seq }));
     } catch (error) {
       if (unreachable(error) && Date.now() < deadline) continue;
       throw error;
@@ -128,12 +164,12 @@ export async function waitForAnyChange(store: Store, options: Pick<WaitOptions, 
     const changes = feed.events.map((event): Change => ({
       note: names.get(event.note_id) ?? '(a deleted note)',
       kind: event.kind,
-      by: event.attribution.agent ?? event.attribution.device,
+      by: byline(event.attribution),
       at: event.timestamp,
       ...(event.body === null ? {} : { body: event.body }),
       ...(event.kind === 'update_task' && event.snapshot?.status ? { status: event.snapshot.status } : {}),
     }));
-    return { reason: 'changed', waited_ms: Date.now() - started, changes };
+    return { reason: 'changed', waited_ms: Date.now() - started, changes, seq: feed.cursor };
   }
   throw new HiveNoteError('timeout', `Nothing changed within ${options.timeoutSeconds} seconds`, 408);
 }

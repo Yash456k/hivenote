@@ -10,27 +10,38 @@ import { sandbox, fixture, cliJson, run, cli, actor, closeServer, serverUrl, roo
 async function exercise(args, env) {
   const hive = (...rest) => cliJson([...args, ...rest], { env });
   const name = 'CLI Résumé 日本語';
-  const created = await hive('add', name, 'A note', 'alpha unique beta');
-  assert.equal(created.note.rev, 1);
+  // A write is answered with what happened, not with the note that was just sent.
+  assert.deepEqual(await hive('add', name, 'A note', 'alpha unique beta'), { ok: 'added', note: name });
   assert.equal((await hive('list')).total, 1);
   assert.equal((await hive('ls')).total, 1, 'shell habits are understood');
-  assert.equal((await hive('read', name)).notes[0].content, 'alpha unique beta');
   assert.equal((await hive('search', 'unique')).total, 1);
-  assert.equal((await hive('edit', name, 'unique', 'edited')).note.content, 'alpha edited beta');
-  assert.equal((await hive('append', name, 'CLI activity')).note.rev, 2);
-  assert.equal((await hive('replace', name, 'replacement')).note.rev, 3);
-  assert.equal((await hive('describe', name, 'A better description')).note.description, 'A better description');
-  assert.equal((await hive('delete', name)).note.rev, 5);
+  assert.equal((await hive('edit', name, 'unique', 'edited')).version, 2);
+  assert.equal((await hive('append', name, 'CLI activity')).ok, 'appended');
+  // Reading shows the text, its state and its progress, without the record around them.
+  const [page] = (await hive('read', name)).notes;
+  assert.equal(page.content, 'alpha edited beta');
+  assert.deepEqual(page.progress.map(line => line.text), ['CLI activity']);
+  assert.ok(page.progress[0].by && page.updated_by);
+  assert.deepEqual([page.id, page.last_attribution], [undefined, undefined]);
+  assert.equal((await hive('replace', name, 'replacement')).version, 3);
+  assert.equal((await hive('describe', name, 'A better description')).version, 4);
+  assert.match((await hive('delete', name)).undo, /^hivenote restore .* 4$/u);
   // A deleted note is still found by name to look back at or bring back.
-  assert.equal((await hive('history', name)).total, 6);
-  assert.equal((await hive('restore', name, '1')).note.content, 'alpha unique beta');
-  await hive('task', 'CLI task', 'Do the thing');
-  assert.equal((await hive('mark', 'CLI task', 'doing')).note.status, 'doing');
+  const history = await hive('history', name);
+  assert.equal(history.total, 6);
+  assert.deepEqual(history.events.map(event => event.version ?? event.text), [1, 2, 'CLI activity', 3, 4, 5]);
+  assert.equal((await hive('restore', name, '1')).version, 6);
+  // --full prints the stored record, for scripts that need ids or attribution.
+  const [stored] = (await hive('read', name, '--full')).notes;
+  assert.equal(stored.content, 'alpha unique beta');
+  assert.equal(stored.rev, 6);
+  assert.equal((await hive('task', 'CLI task', 'Do the thing')).status, 'todo');
+  assert.equal((await hive('mark', 'CLI task', 'doing')).status, 'doing');
   const board = await hive('tasks');
   assert.equal(board.notes[0].status, 'doing');
   assert.ok(board.notes[0].updated_by, 'the board shows who is on the task');
-  assert.equal((await hive('mark', 'CLI task', 'done')).note.status, 'done');
-  return created;
+  assert.deepEqual(await hive('mark', 'CLI task', 'done'), { ok: 'marked', note: 'CLI task', status: 'done', was: 'doing' });
+  return stored;
 }
 
 test('real local CLI subprocesses implement every operation, errors and paths with spaces/non-ASCII', { timeout: 120_000 }, async t => {
@@ -57,9 +68,9 @@ test('real remote CLI subprocesses use authenticated HTTP and never create a loc
   const url = serverUrl(server);
   const configHome = join(dir, 'remote config');
   const env = { HIVENOTE_HOME: configHome, HIVENOTE_TOKEN: token.token };
-  const created = await exercise(['--url', url], env);
-  assert.equal(created.note.last_attribution.principal, token.principal);
-  assert.equal(created.note.last_attribution.verified, true);
+  const stored = await exercise(['--url', url], env);
+  assert.equal(stored.last_attribution.principal, token.principal);
+  assert.equal(stored.last_attribution.verified, true);
   await assert.rejects(access(join(configHome, 'data.db')));
   const missing = await run(process.execPath, [cli, '--url', url, 'list'], { env: { ...env, HIVENOTE_TOKEN: '' } });
   assert.notEqual(missing.code, 0);

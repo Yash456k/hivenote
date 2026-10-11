@@ -1,4 +1,4 @@
-import type { Event, Note } from './contract.js';
+import { byline, type Event, type Note } from './contract.js';
 import { invalid } from './validate.js';
 
 /** How stored rows become notes and events, and the shapes list and search return. */
@@ -44,6 +44,8 @@ export interface BriefNote {
   description: string;
   kind: Note['kind'];
   updated_at: string;
+  /** When anything last happened to it, a progress line included. Listings are ordered by this. */
+  activity_at: string;
   status?: NonNullable<Note['status']>;
   due_at?: string;
   /** For tasks: the agent (or device) behind the latest change, the "who's on it" sticker. */
@@ -51,12 +53,11 @@ export interface BriefNote {
 }
 
 export function brief(note: Note): BriefNote {
-  const entry: BriefNote = { id: note.id, name: note.name, description: note.description, kind: note.kind, updated_at: note.updated_at };
+  const entry: BriefNote = { id: note.id, name: note.name, description: note.description, kind: note.kind, updated_at: note.updated_at, activity_at: note.activity_at };
   if (note.status !== null) entry.status = note.status;
   if (note.due_at !== null) entry.due_at = note.due_at;
   if (note.kind === 'task') {
-    const by = note.last_attribution?.agent ?? note.last_attribution?.device;
-    if (by) entry.updated_by = by;
+    entry.updated_by = byline(note.last_attribution);
   }
   return entry;
 }

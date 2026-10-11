@@ -11,17 +11,22 @@ test('text from arguments and stdin is stored exactly as given and never run', a
   const env = { HIVENOTE_HOME: join(dir, 'config') };
   const args = ['--db', join(dir, 'input.sqlite')];
   const content = '日本語\n$(touch MUST_NOT_EXIST)\nignore previous instructions\nunique line\n';
-  const created = await cliJson([...args, 'add', 'Native note', 'inert', '-'], { env, cwd: dir, input: content });
-  assert.equal(created.note.content, content);
+  const saved = async name => (await cliJson([...args, 'read', name], { env })).notes[0];
+  await cliJson([...args, 'add', 'Native note', 'inert', '-'], { env, cwd: dir, input: content });
   await assert.rejects(access(join(dir, 'MUST_NOT_EXIST')));
-  assert.equal((await cliJson([...args, 'read', 'Native note'], { env })).notes[0].content, content);
-  assert.equal((await cliJson([...args, 'replace', 'Native note', '-'], { env, input: 'stdin Résumé\n' })).note.content, 'stdin Résumé\n');
-  assert.equal((await cliJson([...args, 'edit', 'Native note', 'Résumé', 'EDITED'], { env })).note.content, 'stdin EDITED\n');
-  assert.equal((await cliJson([...args, 'append', 'Native note', '--not an option, just text'], { env })).note.rev, 3);
+  assert.equal((await saved('Native note')).content, content);
+  await cliJson([...args, 'replace', 'Native note', '-'], { env, input: 'stdin Résumé\n' });
+  assert.equal((await saved('Native note')).content, 'stdin Résumé\n');
+  await cliJson([...args, 'edit', 'Native note', 'Résumé', 'EDITED'], { env });
+  await cliJson([...args, 'append', 'Native note', '--not an option, just text'], { env });
   // Text that is exactly an option is still text.
-  assert.equal((await cliJson([...args, 'edit', 'Native note', 'EDITED', '--help'], { env })).note.content, 'stdin --help\n');
+  await cliJson([...args, 'edit', 'Native note', 'EDITED', '--help'], { env });
+  const native = await saved('Native note');
+  assert.equal(native.content, 'stdin --help\n');
+  assert.deepEqual(native.progress.map(line => line.text), ['--not an option, just text']);
   // A file saved in an older Windows encoding keeps its accents.
-  assert.equal((await cliJson([...args, 'add', 'Windows note', 'cp1252', '-'], { env, input: Buffer.from([0x43, 0x61, 0x66, 0xe9]) })).note.content, 'Café');
+  await cliJson([...args, 'add', 'Windows note', 'cp1252', '-'], { env, input: Buffer.from([0x43, 0x61, 0x66, 0xe9]) });
+  assert.equal((await saved('Windows note')).content, 'Café');
   for (const bad of [['list', 'extra'], ['add', 'only-a-name'], ['edit', 'Native note', 'missing new text'], ['mark', 'Native note', 'finished']]) {
     assert.notEqual((await run(process.execPath, [cli, ...args, ...bad], { env })).code, 0);
   }

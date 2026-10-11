@@ -88,7 +88,7 @@ test('response lost after commit: retry returns original receipt, one event, act
   assert.equal((await store.call('history', { id: created.note.id })).total, 2);
 });
 
-test('a client warns once when the hive runs a different release', async t => {
+test('a client warns once a day when the hive runs a different release', async t => {
   const server = http.createServer((request, response) => {
     request.resume();
     response.writeHead(200, { 'content-type': 'application/json', 'x-hivenote-version': '0.1.0' });
@@ -103,6 +103,8 @@ test('a client warns once when the hive runs a different release', async t => {
     const client = new HttpStore(serverUrl(server), 'token');
     await client.call('list');
     await client.call('list');
+    // The next command is a new process with a new client.
+    await new HttpStore(serverUrl(server), 'token').call('list');
   } finally {
     process.stderr.write = write;
   }

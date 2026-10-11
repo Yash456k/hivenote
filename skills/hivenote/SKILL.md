@@ -7,15 +7,21 @@ description: Shared memory across agents. Use when starting work on a project (t
 
 HiveNote is one shared notebook for every agent the user runs (Claude Code, Codex, Hermes, and others), on this machine or others. When the hive lives on another machine, that machine is called the **queen**. Each note has a unique **name**, a one-line **description**, and **text**. Like skills, you decide what to open from the name and description alone.
 
-Every command prints JSON (if you ever get plain text instead, add `--json`). If a command can't reach the hive, run `hivenote status` and tell the user what it says. If `hivenote` is not found, tell the user to run `npm install -g hivenote` (it needs Node 22.16 or newer). `hivenote help` lists every command.
+Every command prints JSON (if you ever get plain text instead, add `--json`). It shows what you act on: a note's text, its state, who wrote what and how long ago (`"ago":"3m"`). A write answers with one short line such as `{"ok":"appended","note":"build-api"}`, so there is no need to read the note again to check it. `--full` adds the stored record (ids, every timestamp, the machine behind each change), which you rarely need. If a command can't reach the hive, run `hivenote status` and tell the user what it says. If `hivenote` is not found, tell the user to run `npm install -g hivenote` (it needs Node 22.16 or newer). `hivenote help` lists every command.
 
 ## Before you start work
 
-1. `hivenote list` shows every note's name and description.
+1. `hivenote list` shows every note's name and description, the most recently active first.
 2. Read what is relevant to your task: `hivenote read name-one name-two`
 3. Or search: `hivenote search deploy staging`
 
 Skip notes that are not relevant. Do not read everything.
+
+When you come back to notes you have already read, ask only for what is new. Every `list`, `read` and `wait` answer ends with a number, such as `"seq":47`, and a `read` also gives the command ready to run under `only_new`. Hand the number back:
+
+```sh
+hivenote read build-api contract --since 47      # new progress, the status now, and the passages of text that changed
+```
 
 ## Saving what you learn
 
@@ -49,15 +55,17 @@ If an `edit` fails because the old text no longer matches, another agent changed
 hivenote tasks                                   # the board: status, who changed it last, how long ago
 hivenote task build-api 'Build the booking API'
 hivenote mark build-api doing                    # tells others you are on it
-hivenote append build-api 'What I did and what is left'
-hivenote mark build-api done
+hivenote append build-api 'Schema is in; endpoints next'
+hivenote mark build-api done 'What I did and what is left'   # leaves that as a progress line, then marks it
 ```
 
 `mark NAME doing` puts your name and the time on the task. It does not lock anything: if a task has said "doing" for hours, the agent on it may have stopped. Check its progress, and ask the user before taking it over.
 
-When you finish a task, **append what you did, then mark it done**, so whoever picks it up next knows the state.
+When the answer to `mark` carries a `heads_up`, you have just replaced a state another agent set: you reopened a task they finished, or marked `doing` a task they are on. Your picture of the board was probably old. Read the task before going on, and put the status back if they were right.
 
-When several agents work together (for example, subagents of one session), give each a role and pass it on every command, such as `--agent planner` or `--agent builder-1`. Otherwise all of them show up under the same name, such as `claude-code`, and nobody can tell who changed what.
+When you finish a task, **say what you did as you mark it done**, so whoever picks it up next knows the state.
+
+When several agents work together (for example, subagents of one session), give each a role and pass it on every command, such as `--agent planner` or `--agent builder-1`. Otherwise all of them show up under the same name, such as `claude-code`, and nobody can tell who changed what. On a queen, names also say the machine: `builder-1@laptop`.
 
 To wait for another agent to finish:
 
@@ -65,11 +73,13 @@ To wait for another agent to finish:
 hivenote wait build-api done                     # blocks up to 9 minutes, then prints the task and its progress
 hivenote wait build-api                          # wakes on any change or appended progress
 hivenote wait                                    # wakes when anything in the hive changes, and lists what did
+hivenote wait --since 47                         # the same, counting from your last look, so nothing in between is missed
+hivenote wait build-api done --since 47          # when it is done, shows only what is new, and names other notes that changed
 ```
 
 A note or task that doesn't exist yet can be waited for too: `wait` says so, then wakes when someone adds it.
 
-Run `wait` in the **foreground**, not as a background job, and give the command a time limit of at least 10 minutes (in Claude Code, a Bash `timeout` of 600000). Keep the 9-minute default inside an agent; a script or service with no time limit of its own can end the command with one, such as `hivenote wait build-api done 2h` or `forever`. A background wait is lost if your session ends first. A timeout exits with an error; tell the user rather than waiting again and again.
+Run `wait` in the **foreground**, not as a background job, and give the command a time limit of at least 10 minutes (in Claude Code, a Bash `timeout` of 600000). Keep the 9-minute default inside an agent; a script or service with no time limit of its own can end the command with one, such as `hivenote wait build-api done 2h` or `forever`. A background wait is lost if your session ends first. A timeout exits with an error that says where the task stands (its status, who changed it last and how long ago); tell the user rather than waiting again and again.
 
 ## Rules
 
