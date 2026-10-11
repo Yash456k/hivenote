@@ -4,6 +4,7 @@ import { chmodSync, closeSync, existsSync, mkdirSync, openSync, unlinkSync } fro
 import { dirname, resolve } from 'node:path';
 import { byline, clientParams, isMethod, MUTATIONS, HiveNoteError, type Actor, type Attribution, type Event, type Method, type Note, type Params, type Previous, type Store } from './contract.js';
 import { openDatabase, storageError, transaction } from './database.js';
+import { held, HOLD_LIMIT_MS } from './wait.js';
 import { due, id, integer, invalid, json, LIMITS, metadata, params as checkParams, status, STATUSES, text } from './validate.js';
 import { JSON_COLUMNS, NOTE_COLUMNS, toEvent, toNote, view, type Row } from './views.js';
 
@@ -22,7 +23,7 @@ const PARAMETERS: Record<Method, readonly string[]> = {
   history: ['id', 'note', 'offset', 'limit'],
   revision: ['id', 'note', 'rev'],
   restore: ['id', 'note', 'rev', 'op_id'],
-  changes: ['since', 'limit', 'tail'],
+  changes: ['since', 'limit', 'tail', 'hold'],
   update_task: ['id', 'note', 'status', 'due_at', 'metadata', 'op_id'],
 };
 
@@ -79,7 +80,10 @@ export class SqliteStore implements Store {
   private run(sql: string, ...values: SQLInputValue[]) { return this.db.prepare(sql).run(...values); }
 
   async call(method: Method, params: Params = {}): Promise<unknown> {
-    return this.execute(method, clientParams(method, params), this.actor);
+    const prepared = clientParams(method, params);
+    // A hive on this machine has no server to hold the question open, so the asker holds it.
+    if (method === 'changes' && typeof prepared.hold === 'number') return held(() => this.execute(method, prepared, this.actor) as { events: unknown[] }, prepared.hold);
+    return this.execute(method, prepared, this.actor);
   }
 
   /** Validate, authorize, then run one method. Writes are idempotent by op_id. */
@@ -365,13 +369,15 @@ export class SqliteStore implements Store {
   /** The global feed of changes after a cursor, or the newest `tail` events. */
   private changes(p: Params): unknown {
     if (p.tail !== undefined) {
-      if (p.since !== undefined || p.limit !== undefined) invalid('changes accepts tail, or since/limit, not both');
+      if (p.since !== undefined || p.limit !== undefined || p.hold !== undefined) invalid('changes accepts tail, or since/limit/hold, not both');
       const newest = fitting(this.all('SELECT * FROM events ORDER BY seq DESC LIMIT ?', integer(p.tail, 'tail', 1, 100)).map(toEvent));
       // The cursor points at the head, so polling continues from now.
       const head = Number(this.get('SELECT coalesce(max(seq),0) AS seq FROM events')?.seq);
       return { events: newest.reverse(), cursor: head, has_more: false };
     }
     const since = p.since === undefined ? 0 : integer(p.since, 'since', 0);
+    // Holding is done by whoever asks on the caller's behalf (the server, or call() above); here it is only checked.
+    if (p.hold !== undefined) integer(p.hold, 'hold', 0, HOLD_LIMIT_MS);
     const { limit } = this.page(p);
     const rows = this.all('SELECT * FROM events WHERE seq>? ORDER BY seq LIMIT ?', since, limit + 1);
     const events = fitting(rows.slice(0, limit).map(toEvent));

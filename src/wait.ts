@@ -44,6 +44,55 @@ export interface Change { note: string; kind: string; by: string; at: string; bo
  */
 export const WAIT_DEFAULTS = { timeoutSeconds: 540, intervalMs: 5000 } as const;
 
+/** The longest a hive holds a `changes` question open. */
+export const HOLD_LIMIT_MS = 8000;
+/** What a waiter asks for: short enough that a slow link still answers inside the 10 seconds a client allows. */
+const ASK_HOLD_MS = 6000;
+/** How often a held question looks again. One look is one indexed query, so many waiters cost little. */
+const LOOK_MS = 100;
+
+/**
+ * Answer a `changes` question when there is something to tell, or when `holdMs` is up.
+ * This is what wakes a waiting agent within a moment of the change, where it used to find
+ * out at its next look, up to 5 seconds later.
+ */
+export async function held<T extends { events: unknown[] }>(look: () => T, holdMs: number, alive: () => boolean = () => true): Promise<T> {
+  const until = Date.now() + holdMs;
+  let answer = look();
+  while (!answer.events.length && Date.now() < until && alive()) {
+    await sleep(Math.max(1, Math.min(LOOK_MS, until - Date.now())));
+    answer = look();
+  }
+  return answer;
+}
+
+/** Where a wait has read up to in the hive's feed, and whether the hive holds questions open. */
+interface Watch { cursor: number | undefined; holds: boolean; early?: number }
+
+/**
+ * Sleep until the next look, or until something changes in the hive, whichever is first.
+ * A queen older than 0.5 refuses a held question and sends no `seq`; then this is a plain sleep.
+ */
+async function pause(store: Store, watch: Watch, intervalMs: number, deadline: number): Promise<void> {
+  const left = (): number => Math.max(0, deadline - Date.now());
+  if (watch.holds && watch.cursor !== undefined) {
+    const hold = Math.max(1, Math.min(ASK_HOLD_MS, left()));
+    const asked = Date.now();
+    try {
+      const feed = await store.call('changes', { since: watch.cursor, limit: 1, hold }) as { events: unknown[] };
+      if (feed.events.length || Date.now() - asked >= Math.min(hold, 1000) - 50) { watch.early = 0; return; }
+      // Answered at once with nothing to tell. A queen that is stopping does that, and so would something
+      // in between that does not hold; look at intervals for now, and stop asking after three in a row.
+      watch.early = (watch.early ?? 0) + 1;
+      if (watch.early >= 3) watch.holds = false;
+    } catch (error) {
+      if (error instanceof HiveNoteError && error.code === 'validation_error') watch.holds = false;
+      else if (!unreachable(error)) throw error;
+    }
+  }
+  await sleep(Math.min(intervalMs, left()));
+}
+
 interface ReadResult { notes: Note[]; updates: Event[]; seq?: number }
 
 /**
@@ -81,19 +130,22 @@ export async function waitForNote(store: Store, options: WaitOptions): Promise<W
   // A note that doesn't exist yet is waited for; someone adding it is the change.
   let missing = false;
   let last: Note | undefined;
+  const watch: Watch = { cursor: undefined, holds: true };
 
   for (let first = true; ; first = false) {
     if (!first) {
       if (Date.now() >= deadline) break;
-      await sleep(Math.min(options.intervalMs, Math.max(0, deadline - Date.now())));
+      await pause(store, watch, options.intervalMs, deadline);
     }
     let result: ReadResult;
     try {
       result = await store.call('read', pinned ? { ids: [pinned] } : { names: [options.name] }) as ReadResult;
     } catch (error) {
-      if (unreachable(error) && Date.now() < deadline) continue;
+      if (unreachable(error) && Date.now() < deadline) { watch.cursor = undefined; continue; }
       throw error;
     }
+    // Whatever changes after this read is what the next pause listens for.
+    watch.cursor = result.seq;
     const note = result.notes[0];
     if (!note) {
       if (pinned) throw new HiveNoteError('not_found', `'${options.name}' was deleted while waiting`, 404);
@@ -136,11 +188,13 @@ export async function waitForAnyChange(store: Store, options: Pick<WaitOptions, 
   const deadline = options.timeoutSeconds === 0 ? Infinity : started + options.timeoutSeconds * 1000;
   // Where the hive's feed of changes stood when the wait began.
   let cursor = options.since;
+  const watch: Watch = { cursor: undefined, holds: true };
 
   for (let first = true; ; first = false) {
     if (!first) {
       if (Date.now() >= deadline) break;
-      await sleep(Math.min(options.intervalMs, Math.max(0, deadline - Date.now())));
+      watch.cursor = cursor;
+      await pause(store, watch, options.intervalMs, deadline);
     }
     let feed: { events: Event[]; cursor: number };
     try {

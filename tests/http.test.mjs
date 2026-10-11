@@ -112,6 +112,48 @@ test('a client warns once a day when the hive runs a different release', async t
   assert.match(warnings[0], /runs 0\.1\.0.*npm install -g hivenote@latest/u);
 });
 
+test('a waiting agent wakes within a moment of the change, on a queen and on a hive on this machine', async t => {
+  const { store, rw, url } = await setup(t);
+  // The usual 5 seconds between looks: unless the question is held open, the wake comes up to 5 seconds late.
+  for (const [name, waiter] of [['through-queen', new HttpStore(url, rw.token)], ['on-this-machine', store]]) {
+    await store.call('create', params(fixture({ name, kind: 'task', status: 'doing' })));
+    const waiting = waitForNote(waiter, { name, status: 'done', timeoutSeconds: 20, intervalMs: 5000 });
+    await new Promise(resolve => setTimeout(resolve, 700));
+    const marked = Date.now();
+    await store.call('update_task', params({ note: name, status: 'done' }));
+    assert.equal((await waiting).note.status, 'done');
+    assert.ok(Date.now() - marked < 1500, `${name}: woke ${Date.now() - marked} ms after the change`);
+  }
+});
+
+test('a worker still waits on a queen too old to hold a question open', async t => {
+  const { store, rw, url } = await setup(t);
+  await store.call('create', params(fixture({ name: 'ship-it', kind: 'task', status: 'todo' })));
+  // A queen before 0.5 refuses a parameter she does not know.
+  let refused = 0;
+  const old = http.createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const sent = Buffer.concat(chunks);
+    if (JSON.parse(sent).params?.hold !== undefined) {
+      refused++;
+      response.writeHead(400, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ error: { code: 'validation_error', message: 'Unknown parameter for changes' } }));
+      return;
+    }
+    const answer = await fetch(url + request.url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: request.headers.authorization }, body: sent });
+    response.writeHead(answer.status, { 'content-type': 'application/json' });
+    response.end(await answer.text());
+  });
+  await new Promise(resolve => old.listen(0, '127.0.0.1', resolve));
+  t.after(() => closeServer(old));
+  const waiting = waitForNote(new HttpStore(serverUrl(old), rw.token), { name: 'ship-it', status: 'done', timeoutSeconds: 20, intervalMs: 100 });
+  await new Promise(resolve => setTimeout(resolve, 500));
+  await store.call('update_task', params({ note: 'ship-it', status: 'done' }));
+  assert.equal((await waiting).note.status, 'done');
+  assert.equal(refused, 1, 'it asked once, then went back to looking at intervals');
+});
+
 test('a worker keeps waiting while a tunnel answers for a queen that is down', async t => {
   const { store, rw, url } = await setup(t);
   await store.call('create', params(fixture({ name: 'ship-it', kind: 'task', status: 'todo' })));

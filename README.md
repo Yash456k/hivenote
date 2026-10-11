@@ -35,7 +35,7 @@ hivenote append build-api "Endpoint works; adding the 409 path"
 hivenote mark build-api done
 
 # a third one, meanwhile
-hivenote wait build-api done      # returns within seconds of the build finishing
+hivenote wait build-api done      # returns the moment the build finishes
 hivenote mark review-api doing
 ```
 

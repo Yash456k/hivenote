@@ -74,7 +74,8 @@ export function clientParams(method: Method, params: Params = {}): Params {
  history {note|id,offset?,limit?} => {events:Event[],total,offset,has_more} (deleted IDs allowed)
  revision {note|id,rev} => {note:Note}
  restore {note|id,rev,op_id} (deleted ID allowed)
- changes {since?:seq,limit?} | {tail:1-100} => {events:Event[],cursor,has_more}
+ changes {since?:seq,limit?,hold?:ms} | {tail:1-100} => {events:Event[],cursor,has_more}
+ hold (at most 8000) keeps the question open until something comes after since, or the time is up; how wait wakes at once.
  update_task {note|id,status?,due_at?:ISO|null,metadata?,op_id}
  Every mutation returns immutable {note:Note,event_seq:number,op_id:string}; append leaves rev unchanged.
  update_task with a status also returns previous:{status,by,at}, what the task said before.

@@ -4,6 +4,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isMethod, MUTATIONS, HiveNoteError, VERSION, type Actor, type Method, type Params } from './contract.js';
+import { held } from './wait.js';
 
 export interface ServerStore { authenticate(token: string): Actor; execute(method: Method, params: Params, actor: Actor): unknown; }
 export interface ServerOptions {
@@ -115,7 +116,15 @@ export async function startServer(store: ServerStore, options: ServerOptions = {
         }
       }
       if (actor.scope !== 'rw' && MUTATIONS.has(input.method)) throw new HiveNoteError('forbidden', 'Token is read-only', 403);
-      const result = store.execute(input.method, params, actor);
+      // A waiting agent asks what changed and is answered when something does, not at its next look.
+      const result = input.method === 'changes' && typeof params.hold === 'number'
+        ? await held(() => store.execute('changes', params, actor) as { events: unknown[] }, params.hold, () => !response.destroyed && server.listening)
+        : store.execute(input.method, params, actor);
+      // A token taken away while its question was held gets no answer.
+      if (input.method === 'changes' && typeof params.hold === 'number' && !viewer) store.authenticate(authorization!.slice(7));
+      // A queen that is stopping lets go of her callers: a waiter asking again and again on one
+      // connection would otherwise keep her from ever closing.
+      if (!server.listening) response.setHeader('connection', 'close');
       if (drop && MUTATIONS.has(input.method)) { drop = false; response.destroy(); return; }
       reply(response, 200, { result });
     })().catch(error => failure(response, error));
