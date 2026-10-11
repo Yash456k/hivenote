@@ -165,8 +165,9 @@ export async function waitForNote(store: Store, options: WaitOptions): Promise<W
       if (options.status === undefined && missing) return answer('added');
       // A change made after the caller last looked, but before this wait began, still counts.
       if (options.status === undefined && options.since !== undefined) {
-        const { events } = await changesSince(store, options.since);
-        if (events.some(event => event.note_id === note.id)) return answer('changed');
+        // More happened than can be gone through: say it changed, and let the caller read how it stands.
+        const { events, complete } = await changesSince(store, options.since);
+        if (!complete || events.some(event => event.note_id === note.id)) return answer('changed');
       }
       continue;
     }
@@ -211,8 +212,9 @@ export async function waitForAnyChange(store: Store, options: Pick<WaitOptions, 
     // Progress lines carry no copy of their note, so look those names up.
     const names = new Map(feed.events.flatMap(event => event.snapshot ? [[event.note_id, event.snapshot.name] as const] : []));
     const unnamed = [...new Set(feed.events.map(event => event.note_id).filter(id => !names.has(id)))];
-    if (unnamed.length) {
-      const { notes } = await store.call('read', { ids: unnamed }) as ReadResult;
+    // One read takes at most 100 notes.
+    for (let i = 0; i < unnamed.length; i += 100) {
+      const { notes } = await store.call('read', { ids: unnamed.slice(i, i + 100) }) as ReadResult;
       for (const note of notes) names.set(note.id, note.name);
     }
     const changes = feed.events.map((event): Change => ({

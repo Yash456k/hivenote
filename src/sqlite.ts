@@ -156,7 +156,7 @@ export class SqliteStore implements Store {
       case 'restore': note = this.restored(note, p.rev); break;
       case 'update_task':
         // Marking never locks, so the answer says whose state was replaced; the caller can then think again.
-        if (p.status !== undefined) previous = { status: note.status, by: byline(note.last_attribution), at: note.updated_at };
+        if (p.status !== undefined) previous = { status: note.status, ...this.statusSetter(note) };
         applyTaskUpdate(note, p);
         break;
       default: invalid('Unsupported mutation');
@@ -247,6 +247,21 @@ export class SqliteStore implements Store {
     return toNote(row);
   }
 
+  /**
+   * Who gave a task the status it has now, and when. Not whoever changed it last: an edit to the
+   * text in between must not hide that another agent marked it doing.
+   */
+  private statusSetter(note: Note): { by: string; at: string } {
+    let setter = { by: byline(note.last_attribution), at: note.updated_at };
+    // Newest first, back through the versions that already carried this status; the oldest of them set it.
+    const versions = this.all("SELECT json_extract(snapshot,'$.status') AS status, attribution, timestamp FROM events WHERE note_id=? AND kind<>'append' ORDER BY seq DESC LIMIT 200", note.id);
+    for (const version of versions) {
+      if ((version.status ?? null) !== note.status) break;
+      setter = { by: byline(JSON.parse(version.attribution as string) as Attribution), at: version.timestamp as string };
+    }
+    return setter;
+  }
+
   private historical(note: Note, rev: unknown): Note {
     const row = this.get('SELECT snapshot FROM events WHERE note_id=? AND revision=?', note.id, integer(rev, 'rev', 1));
     if (!row) throw new HiveNoteError('not_found', 'Revision not found', 404);
@@ -296,7 +311,7 @@ export class SqliteStore implements Store {
     }
     const clause = where.join(' AND ');
     const total = Number(this.get(`SELECT count(*) AS n FROM notes WHERE ${clause}`, ...args)?.n);
-    const notes = this.all(`SELECT * FROM notes WHERE ${clause} ORDER BY activity_at DESC,name,id LIMIT ? OFFSET ?`, ...args, limit, offset).map(row => shape(toNote(row)));
+    const notes = this.all(`SELECT * FROM notes WHERE ${clause} ORDER BY name,id LIMIT ? OFFSET ?`, ...args, limit, offset).map(row => shape(toNote(row)));
     return { notes, total, offset, has_more: offset + notes.length < total, seq: this.seq() };
   }
 

@@ -66,8 +66,11 @@ export function textChanges(before: string, after: string): Json[] {
   for (const [ki, kj] of [...keep, [x.length, y.length] as [number, number]]) {
     if (ki > i || kj > j) {
       const was = x.slice(i, ki).join('\n'), now = y.slice(j, kj).join('\n');
-      const previous = head + j > 0 ? b[head + j - 1] : undefined;
-      changes.push(ki > i ? { was, now } : { ...(previous === undefined ? {} : { after: previous }), added: now });
+      // An added passage is placed by the nearest line before it that says something; a blank line places nothing.
+      let at = head + j - 1;
+      while (at >= 0 && !b[at]!.trim()) at--;
+      // A change in blank lines alone is not worth a reader's attention.
+      if (was.trim() || now.trim()) changes.push(ki > i ? { was, now } : { ...(at < 0 ? {} : { after: b[at] }), added: now });
     }
     i = ki + 1; j = kj + 1;
   }
@@ -79,15 +82,31 @@ export function textChanges(before: string, after: string): Json[] {
  * text was rewritten, the passages that changed, or the whole text when that is shorter
  * or the earlier text is not to hand.
  */
-function fresh(stored: Note, updates: Event[], rewritten: boolean, before: string | undefined, now: number): Json {
+function fresh(stored: Note, updates: Event[], news: News, now: number): Json {
+  // Added since then: all of it is new to the reader.
+  if (news.created?.includes(stored.id)) return page(stored, updates, now);
   const out: Json = { name: stored.name };
   if (stored.status !== null) out.status = stored.status;
   out.updated_by = byline(stored.last_attribution);
   out.ago = age(stored.updated_at, now);
-  if (rewritten) {
-    const changes = before === undefined ? undefined : textChanges(before, stored.content);
-    if (changes && JSON.stringify(changes).length < stored.content.length) out.text_changes = changes;
-    else out.content = stored.content;
+  if (news.rewritten.includes(stored.id)) {
+    const before = news.before?.[stored.id];
+    if (before === undefined) {
+      out.description = stored.description;
+      out.content = stored.content;
+    } else {
+      if (before.description !== stored.description) out.description = stored.description;
+      const changes = textChanges(before.content, stored.content);
+      if (changes.length) {
+        if (JSON.stringify(changes).length < stored.content.length) out.text_changes = changes;
+        else out.content = stored.content;
+      } else if (before.description === stored.description) {
+        // Rewritten and put back, or rewritten to the same words: say who did what, so an agent
+        // whose own edit was undone does not go on believing it is there.
+        out.text = `the same as at ${news.since}`;
+        out.rewritten = (news.rewrites ?? []).filter(rewrite => rewrite.id === stored.id).map(rewrite => ({ kind: rewrite.kind, by: rewrite.by, ago: age(rewrite.at, now) }));
+      }
+    }
   }
   out.progress = progress(stored, updates, now);
   return out;
@@ -110,13 +129,19 @@ function change(event: Event, now: number): Json {
  * In a listing the age is since anything happened to the note, a progress line included,
  * so a task whose agent is still writing progress does not look abandoned.
  */
-function aged({ id: _id, updated_at, activity_at, at, ...entry }: Json, now: number): Json {
+function aged({ id: _id, updated_at, activity_at, at, updated_by, changed_by, active_by, ...entry }: Json, now: number): Json {
   const when = activity_at ?? updated_at ?? at;
-  return typeof when === 'string' ? { ...entry, ago: age(when, now) } : entry;
+  if (typeof when !== 'string') return entry;
+  const who = changed_by ?? updated_by;
+  if (who === undefined) return { ...entry, ago: age(when, now) };
+  // The name and the age are of one event. When someone else posted the latest line, that is
+  // said beside it, so a stalled task does not look alive under the name of whoever marked it.
+  if (active_by === undefined || active_by === who || activity_at === updated_at || typeof updated_at !== 'string') return { ...entry, updated_by: who, ago: age(when, now) };
+  return { ...entry, updated_by: who, ago: age(updated_at, now), last_line: { by: active_by, ago: age(when, now) } };
 }
 
 /** A name as one word of a shell command. */
-function word(name: string): string {
+export function word(name: string): string {
   return /^[\w.-]+$/u.test(name) ? name : `'${name.replaceAll("'", "'\\''")}'`;
 }
 
@@ -152,6 +177,7 @@ function done(command: string, receipt: Receipt): Json {
   const out: Json = { ok: DID[command], note: saved.name };
   if (command === 'task') out.status = saved.status;
   if (command === 'edit' || command === 'replace' || command === 'describe' || command === 'restore') out.version = saved.rev;
+  if (command === 'restore' && saved.status !== null) out.status = saved.status;
   if (command === 'delete') out.undo = `hivenote restore ${word(saved.name)} ${saved.rev - 1}`;
   if (command === 'mark') {
     out.status = saved.status;
@@ -166,8 +192,15 @@ interface Read {
   notes: Note[]; missing: string[]; updates?: Event[]; updates_has_more?: boolean;
   news?: News;
 }
-/** Set by `--since`: which of the notes changed after that point, which had their text rewritten, and that text before. */
-interface News { since: number; touched: string[]; rewritten: string[]; before?: Record<string, string> }
+/**
+ * Set by `--since`: which of the notes changed after that point, which were added, which were
+ * rewritten (by whom, and what each said before).
+ */
+interface News {
+  since: number; touched: string[]; rewritten: string[]; created?: string[];
+  before?: Record<string, { content: string; description: string }>;
+  rewrites?: { id: string; kind: string; by: string; at: string }[];
+}
 
 /** The lean form of one command's answer. Commands about machines are short already. */
 export function lean(command: string, value: unknown, now = Date.now()): unknown {
@@ -180,18 +213,18 @@ export function lean(command: string, value: unknown, now = Date.now()): unknown
       const gaps = missing.length ? { missing } : {};
       if (news) {
         const unchanged = notes.filter(stored => !news.touched.includes(stored.id)).map(stored => stored.name);
-        const changed = notes.filter(stored => news.touched.includes(stored.id)).map(stored => fresh(stored, updates, news.rewritten.includes(stored.id), news.before?.[stored.id], now));
+        const changed = notes.filter(stored => news.touched.includes(stored.id)).map(stored => fresh(stored, updates, news, now));
         return { notes: changed, ...(unchanged.length ? { unchanged } : {}), ...gaps, ...rest };
       }
       // Said in full, because an agent that never saw the guide does not connect a bare number with the flag.
       const again = notes.length && typeof rest.seq === 'number' ? { only_new: `hivenote read ${notes.map(stored => word(stored.name)).join(' ')} --since ${rest.seq}` } : {};
-      return { notes: notes.map(stored => page(stored, updates, now)), ...gaps, ...rest, ...again, ...(more ? { earlier_progress: 'hivenote history NAME' } : {}) };
+      return { notes: notes.map(stored => page(stored, updates, now)), ...gaps, ...rest, ...again, ...(more ? { earlier_progress: `hivenote history ${notes.length === 1 ? word(notes[0]!.name) : 'NAME'}` } : {}) };
     }
     case 'wait': {
       // How long the wait took is of no use to whoever waited.
       const { waited_ms: _waited, note: stored, updates = [], updates_has_more: _more, changes, news, ...rest } = v as { waited_ms?: number; note?: Note; updates?: Event[]; updates_has_more?: boolean; changes?: Json[]; news?: News };
       if (changes) return { ...rest, changes: changes.map(({ body, ...entry }) => ({ ...aged(entry, now), ...(body === undefined ? {} : { text: body }) })) };
-      return { ...rest, note: news ? fresh(stored!, updates, news.rewritten.includes(stored!.id), news.before?.[stored!.id], now) : page(stored!, updates, now) };
+      return { ...rest, note: news ? fresh(stored!, updates, news, now) : page(stored!, updates, now) };
     }
     case 'history':
       return { ...v, events: (v.events as Event[]).map(event => change(event, now)) };

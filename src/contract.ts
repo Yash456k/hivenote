@@ -64,7 +64,7 @@ export function clientParams(method: Method, params: Params = {}): Params {
 }
 
 /* Wire contract (notes are named by `note`, their name; `id` is still accepted from older clients) (all optional fields omitted, not undefined):
- list {offset?,limit?,kind?,status?,detail?:'brief'|'full'} => {notes: BriefNote[] (or Omit<Note,'content'>[] when full), total,offset,has_more,seq}, latest activity first
+ list {offset?,limit?,kind?,status?,detail?:'brief'|'full'} => {notes: BriefNote[] (or Omit<Note,'content'>[] when full), total,offset,has_more,seq}, by name
  read {ids?:string[],names?:string[]} exactly one selector => {notes:Note[],missing:string[],seq}
  seq is the number of the hive's latest change when the answer was made: changes {since:seq} gives what came after.
  search {query,offset?,limit?,detail?} => {notes:(BriefNote&{snippet})[],total,offset,has_more}

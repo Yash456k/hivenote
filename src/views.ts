@@ -48,8 +48,11 @@ export interface BriefNote {
   activity_at: string;
   status?: NonNullable<Note['status']>;
   due_at?: string;
-  /** For tasks: the agent (or device) behind the latest change, the "who's on it" sticker. */
+  /** For tasks: the agent (or device) behind the latest change, as every version has sent it. */
   updated_by?: string;
+  /** For tasks: who made the latest change, and who was last active on it (a progress line counts), each as agent@machine. */
+  changed_by?: string;
+  active_by?: string;
 }
 
 export function brief(note: Note): BriefNote {
@@ -57,7 +60,10 @@ export function brief(note: Note): BriefNote {
   if (note.status !== null) entry.status = note.status;
   if (note.due_at !== null) entry.due_at = note.due_at;
   if (note.kind === 'task') {
-    entry.updated_by = byline(note.last_attribution);
+    const by = note.last_attribution?.agent ?? note.last_attribution?.device;
+    if (by) entry.updated_by = by;
+    entry.changed_by = byline(note.last_attribution);
+    entry.active_by = byline(note.last_activity_attribution);
   }
   return entry;
 }

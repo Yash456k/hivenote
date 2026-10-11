@@ -164,11 +164,18 @@ test('a mark that replaces a state another agent set says whose, so an old look 
   const as = (agent, ...words) => cliJson(['--db', db, '--agent', agent, ...words]);
   await as('planner', 'task', 'backend', 'Build the backend');
   assert.equal((await as('builder', 'mark', 'backend', 'doing')).heads_up, undefined);
+  // It goes by who set the status: the planner rewording the task in between does not hide the builder.
+  await as('planner', 'describe', 'backend', 'Build the backend service');
   assert.match((await as('reviewer', 'mark', 'backend', 'doing')).heads_up, /builder marked this doing/u);
   await as('builder', 'mark', 'backend', 'done');
   const reopened = await as('planner', 'mark', 'backend', 'todo');
   assert.equal(reopened.was, 'done');
   assert.match(reopened.heads_up, /was done \(builder, \d+s ago\) and you have reopened it.*hivenote mark backend done/u);
+
+  // On the board, a line from someone else does not make the task look alive under the planner's name.
+  await as('reviewer', 'append', 'backend', 'Is anyone on this?');
+  const [entry] = (await as('builder', 'tasks')).notes;
+  assert.deepEqual([entry.updated_by, entry.last_line.by], ['planner', 'reviewer']);
 });
 
 test('an agent coming back is shown only what is new, and a wait counts from where it last looked', async t => {
@@ -206,6 +213,19 @@ test('an agent coming back is shown only what is new, and a wait counts from whe
   await as('builder', 'edit', 'contract', '60 a minute', '120 a minute');
   const edited = await as('planner', 'read', 'contract', '--since', String(seq));
   assert.deepEqual(edited.notes[0].text_changes, [{ was: 'Rate limit: 60 a minute', now: 'Rate limit: 120 a minute' }]);
+
+  // A task added since then comes whole, and a note that was only re-described says its new description.
+  await as('builder', 'task', 'frontend', 'Build the page');
+  await as('builder', 'describe', 'contract', 'The public contract, second draft');
+  const later = await as('planner', 'read', 'contract', 'frontend', '--since', String(edited.seq));
+  assert.deepEqual(later.notes.map(note => [note.name, note.description]), [['contract', 'The public contract, second draft'], ['frontend', 'Build the page']]);
+  // A number this hive never gave would call everything unchanged, so it is refused.
+  const ahead = await run(process.execPath, [cli, '--db', db, 'read', 'contract', '--since', '99999']);
+  assert.match(ahead.stderr, /ahead of this hive, whose latest change is \d+/u);
+  // A mark that is refused leaves no progress line behind.
+  const refused = await run(process.execPath, [cli, '--db', db, 'mark', 'contract', 'done', 'Finished it']);
+  assert.match(refused.stderr, /is a note, not a task/u);
+  assert.equal((await as('planner', 'read', 'contract')).notes[0].progress.some(line => line.text === 'Finished it'), false);
 });
 
 test('adding under a name that is taken says what is already there', async t => {

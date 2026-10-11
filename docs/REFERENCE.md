@@ -59,7 +59,7 @@ hivenote read build-api contract --since 47     # only what changed after 47
 hivenote wait --since 47                        # answers at once if anything changed after 47
 ```
 
-`read --since` gives, for each note that changed, its status, who changed it and how long ago, and its new progress lines. If its text was rewritten, it gives the passages that changed as `text_changes`, a list of `{was, now}` (or `{after, added}` for lines that were only added), or the whole text when that is shorter. Notes with nothing new are named under `unchanged`. `wait NAME --since` answers in the same form, and names under `also_changed` any other notes that changed since then, so an agent watching one task hears that the contract moved. A queen older than 0.5 doesn't send `seq` with `read` and `list`; `--since` works there with a number from `wait`.
+`read --since` gives, for each note that changed, its status, who changed it and how long ago, and its new progress lines. A note added since then comes whole. If a note's text was rewritten, it gives the passages that changed as `text_changes`, a list of `{was, now}` (or `{after, added}` for lines that were only added), or the whole text when that is shorter; a changed description is given too. If it was rewritten and reads the same as before (an edit that another agent undid, say), it says `"text":"the same as at 47"` and lists who did what under `rewritten`. Notes with nothing new are named under `unchanged`. `wait NAME --since` answers in the same form, and names under `also_changed` any other notes that changed since then, so an agent watching one task hears that the contract moved. A number higher than the hive's latest change is refused. `--since` needs a queen on 0.5 or newer: an older one sends no `seq`.
 
 ## Labels
 
@@ -147,13 +147,13 @@ Agents and scripts always get JSON: results on stdout, and errors on stderr as `
 That JSON holds what an agent acts on, not everything the hive stores:
 
 - `read` and `wait NAME` give each note as `name`, `description`, `kind`, `status`, `updated_by`, `ago`, `content` and `progress`, a list of `{by, ago, text}`.
-- `list`, `tasks` and `search` give `name`, `description`, `kind`, `ago`, and for tasks `status` and `updated_by`. `list` and `tasks` put the latest activity first, and their `ago` is since that activity, a progress line included.
+- `list`, `tasks` and `search` give `name`, `description`, `kind`, `ago`, and for tasks `status` and `updated_by`. `list` and `tasks` put the latest activity first. For a task, `updated_by` and `ago` are one event: the latest thing its last changer did, a progress line included. If someone else posted the latest line, that is given beside it as `last_line`, `{by, ago}`, so a task its owner has left does not look alive.
 - `history` gives one line per change: `version`, `kind`, `by`, `ago`, and `text` for a progress line.
-- A write answers with `{"ok", "note"}`, plus `version` after a change to the text, `status` and `was` after `mark`, and `undo` after `delete`.
+- A write answers with `{"ok", "note"}`, plus `version` after a change to the text, `status` and `was` after `mark`, the `status` put back by a `restore` of a task, and `undo` after `delete`.
 - `ago` is an age, such as `40s`, `3m`, `2h` or `5d`. An agent seldom knows what time it is, so an age is what it can act on, and a timestamp costs about five times as many tokens. The exact times are in `--full`.
 - `list`, `tasks`, `read` and `wait` end with `seq`, for `--since`; `read` adds `only_new`, that command written out.
 
-`--full` prints the stored record instead: ids, every timestamp, the full attribution of each change, a copy of the note in each history entry, and the whole note after a write. A script that reads any of those adds `--full`. A person typing in a terminal gets a readable view instead; `--json` forces JSON there too, and `NO_COLOR` turns off bold and dim text.
+`--full` prints the stored record instead: ids, every timestamp, the full attribution of each change, a copy of the note in each history entry (so `hivenote history NAME --full` shows what an earlier version said before you restore it), and the whole note after a write. A script that reads any of those adds `--full`. A person typing in a terminal gets a readable view instead; `--json` forces JSON there too, and `NO_COLOR` turns off bold and dim text.
 
 | Variable | What it does |
 |---|---|

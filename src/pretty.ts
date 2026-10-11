@@ -6,8 +6,8 @@ import { headsUp } from './lean.js';
  * JSON; the CLI only calls this when stdout is a terminal and no agent is detected.
  */
 
-interface Brief { name: string; description: string; kind: string; status?: string | null; snippet?: string; updated_at?: string; activity_at?: string; updated_by?: string }
-interface Note extends Brief { id: string; content: string; rev: number; last_attribution?: Who }
+interface Brief { name: string; description: string; kind: string; status?: string | null; snippet?: string; updated_at?: string; activity_at?: string; updated_by?: string; changed_by?: string; active_by?: string }
+interface Note extends Brief { id: string; content: string; rev: number; last_attribution?: Who; last_activity_attribution?: Who }
 type Who = Attribution;
 interface Change { note: string; kind: string; by: string; at: string; body?: string; status?: string }
 interface Event { note_id: string; kind: string; revision: number | null; body: string | null; timestamp: string; attribution?: Who }
@@ -31,7 +31,10 @@ const notes = (count: unknown): string => `${String(count)} note${count === 1 ? 
 function sticker(note: Brief): string {
   if (note.kind !== 'task') return '';
   const when = note.activity_at ?? note.updated_at;
-  const parts = [note.status ?? 'todo', note.updated_by, when && ago(when)].filter(Boolean);
+  const by = note.changed_by ?? note.updated_by;
+  // One name with one age; when someone else posted the latest line, that is said beside it.
+  const others = note.active_by !== undefined && note.active_by !== by && note.activity_at !== note.updated_at && note.updated_at !== undefined;
+  const parts = [note.status ?? 'todo', by, others ? ago(note.updated_at!) : when && ago(when), others && `last line ${note.active_by} ${ago(when!)}`].filter(Boolean);
   return dim(`[${parts.join(' · ')}]`);
 }
 
@@ -46,7 +49,7 @@ function listing(notes: Brief[], empty: string): string {
 
 function page(note: Note, updates: Event[]): string {
   const lines = [bold(note.name), dim(note.description)];
-  if (note.kind === 'task') lines.push(sticker({ ...note, updated_by: who(note.last_attribution) }));
+  if (note.kind === 'task') lines.push(sticker({ ...note, changed_by: who(note.last_attribution), ...(note.last_activity_attribution ? { active_by: who(note.last_activity_attribution) } : {}) }));
   if (note.content) lines.push('', note.content);
   const progress = updates.filter(update => update.note_id === note.id && update.body);
   if (progress.length) {
