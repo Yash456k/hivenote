@@ -167,6 +167,8 @@ test('a mark that replaces a state another agent set says whose, so an old look 
   // It goes by who set the status: the planner rewording the task in between does not hide the builder.
   await as('planner', 'describe', 'backend', 'Build the backend service');
   assert.match((await as('reviewer', 'mark', 'backend', 'doing')).heads_up, /builder marked this doing/u);
+  // The reviewer is on it now too, so the next agent hears about the reviewer.
+  assert.match((await as('builder', 'mark', 'backend', 'doing')).heads_up, /reviewer marked this doing/u);
   await as('builder', 'mark', 'backend', 'done');
   const reopened = await as('planner', 'mark', 'backend', 'todo');
   assert.equal(reopened.was, 'done');

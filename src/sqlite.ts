@@ -253,11 +253,14 @@ export class SqliteStore implements Store {
    */
   private statusSetter(note: Note): { by: string; at: string } {
     let setter = { by: byline(note.last_attribution), at: note.updated_at };
-    // Newest first, back through the versions that already carried this status; the oldest of them set it.
-    const versions = this.all("SELECT json_extract(snapshot,'$.status') AS status, attribution, timestamp FROM events WHERE note_id=? AND kind<>'append' ORDER BY seq DESC LIMIT 200", note.id);
+    // Newest first, back through the versions that already carried this status, to the mark that set it
+    // (or, when it was never marked, to the version that first carried it).
+    const versions = this.all("SELECT kind, json_extract(snapshot,'$.status') AS status, attribution, timestamp FROM events WHERE note_id=? AND kind<>'append' ORDER BY seq DESC LIMIT 200", note.id);
     for (const version of versions) {
       if ((version.status ?? null) !== note.status) break;
       setter = { by: byline(JSON.parse(version.attribution as string) as Attribution), at: version.timestamp as string };
+      // The latest mark counts, even one that repeated the status: that agent is on the task too.
+      if (version.kind === 'update_task') break;
     }
     return setter;
   }

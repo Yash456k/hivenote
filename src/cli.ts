@@ -225,12 +225,15 @@ type Run = (words: string[], store: Store) => Promise<unknown>;
  * pages cannot shuffle, and they are sorted here.
  */
 async function everything(store: Store, filter: Params): Promise<unknown> {
-  type Entry = { name: string; updated_at: string; activity_at?: string };
+  type Entry = { name: string; kind: string; updated_at: string; activity_at?: string; updated_by?: string; last_attribution?: { agent?: string; device: string } };
   const notes: Entry[] = [];
   let seq: number | undefined;
+  if (view.full) filter = { ...filter, detail: 'full' };
   for (let offset = 0; ; offset += 100) {
     const page = await store.call('list', { ...filter, limit: 100, offset }) as { notes: Entry[]; has_more: boolean; seq?: number };
-    notes.push(...page.notes);
+    // The stored summary has no updated_by; earlier versions printed it for tasks, so a script that reads it still finds it.
+    notes.push(...page.notes.map(note => (view.full && note.kind === 'task' && note.updated_by === undefined && note.last_attribution
+      ? { ...note, updated_by: note.last_attribution.agent ?? note.last_attribution.device } : note)));
     // The first page's number: a change made while later pages were read is then shown again by --since, never missed.
     seq ??= page.seq;
     if (!page.has_more) break;

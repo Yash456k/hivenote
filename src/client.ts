@@ -68,14 +68,19 @@ export class HttpStore implements Store {
     if (!isMethod(method)) throw new HiveNoteError('invalid_method', 'Unknown method');
     const body = JSON.stringify({ method, params: clientParams(method, params), ...this.labels });
     if (Buffer.byteLength(body) > 1024 * 1024) throw new HiveNoteError('body_too_large', 'Request exceeds 1 MiB', 413);
+    // A held question is answered late on purpose, and the wait behind it has a time limit of its own:
+    // allow its hold and a little more, and do not ask again when the answer is lost.
+    const held = method === 'changes' && typeof params.hold === 'number' ? params.hold : undefined;
+    const timeoutMs = held === undefined ? this.timeoutMs : Math.min(this.timeoutMs, held + 2000);
+    const retries = held === undefined ? this.retries : 0;
     // "Busy" means another writer holds the hive for a moment; keep trying for a few seconds.
     const busyUntil = Date.now() + 5000;
     for (let attempt = 0; ; attempt++) {
       let response: Response;
       try {
-        response = await this.send(this.endpoint, { method: 'POST', redirect: 'error', headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}` }, body, signal: AbortSignal.timeout(this.timeoutMs) });
+        response = await this.send(this.endpoint, { method: 'POST', redirect: 'error', headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}` }, body, signal: AbortSignal.timeout(timeoutMs) });
       } catch {
-        if (attempt < this.retries) { await pause(attempt); continue; }
+        if (attempt < retries) { await pause(attempt); continue; }
         throw new HiveNoteError('transport_error', 'Unable to reach HiveNote server', 503);
       }
       this.serverVersion = response.headers.get('x-hivenote-version') ?? this.serverVersion;
@@ -83,17 +88,17 @@ export class HttpStore implements Store {
         this.versionChecked = true;
         warnOnOtherVersion(this.serverVersion, new URL(this.endpoint).origin);
       }
-      if (response.status === 503 && (attempt < this.retries || Date.now() < busyUntil)) { await response.body?.cancel(); await pause(attempt); continue; }
+      if (response.status === 503 && (attempt < retries || Date.now() < busyUntil)) { await response.body?.cancel(); await pause(attempt); continue; }
       let payload: unknown;
       try { payload = await response.json(); } catch (error) {
         // A truncated connection after headers is still a transport failure.
         if (!(error instanceof SyntaxError)) {
-          if (attempt < this.retries) { await pause(attempt); continue; }
+          if (attempt < retries) { await pause(attempt); continue; }
           throw new HiveNoteError('transport_error', 'Server connection interrupted', 503);
         }
         // A tunnel or proxy in front of the queen answers with its own error page while she is down.
         if (response.status >= 500) {
-          if (attempt < this.retries) { await pause(attempt); continue; }
+          if (attempt < retries) { await pause(attempt); continue; }
           throw new HiveNoteError('transport_error', 'Unable to reach HiveNote server', 503);
         }
         throw new HiveNoteError('invalid_response', 'Server returned an invalid JSON response', 502);
