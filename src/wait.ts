@@ -86,8 +86,13 @@ async function pause(store: Store, watch: Watch, intervalMs: number, deadline: n
       watch.early = (watch.early ?? 0) + 1;
       if (watch.early >= 3) watch.holds = false;
     } catch (error) {
+      // A queen too old to hold a question refuses it; then stop asking. Something in between may
+      // cut a held answer short with an error of its own (a gateway's 504); after three of those,
+      // stop asking too. Either way the wait goes on, by looking at intervals.
       if (error instanceof HiveNoteError && error.code === 'validation_error') watch.holds = false;
-      else if (!unreachable(error)) throw error;
+      else if (unreachable(error)) { /* the hive is away; look again after the usual sleep */ }
+      else if (error instanceof HiveNoteError && error.status >= 500) { watch.early = (watch.early ?? 0) + 1; if (watch.early >= 3) watch.holds = false; }
+      else throw error;
     }
   }
   await sleep(Math.min(intervalMs, left()));
