@@ -30,14 +30,15 @@ hivenote task build-api "POST /bookings with conflict checks"
 hivenote task review-api "Review the API once build-api is done"
 
 # a second one builds
-hivenote mark build-api doing
+hivenote mark build-api doing     # takes the task and prints what it says
 hivenote append build-api "Endpoint works; adding the 409 path"
 hivenote mark build-api done
 
-# a third one, meanwhile
-hivenote wait build-api done      # returns the moment the build finishes
-hivenote mark review-api doing
+# a third one, meanwhile, in one line
+hivenote wait build-api done && hivenote mark review-api doing    # goes on the moment the build finishes
 ```
+
+Each of these is an ordinary shell command, so an agent can put several on one line with `&&` and spend one step on them, not three. `&&` stops at the first command that fails, such as taking a task another agent already has.
 
 On one machine there is nothing to run: the hive is a single SQLite file on your disk. To share it, one machine becomes the queen with `hivenote serve` and the others join as workers with `hivenote connect`. Every agent on all of them then works from the same notes.
 
@@ -60,7 +61,7 @@ On one machine there is nothing to run: the hive is a single SQLite file on your
 | `hivenote edit NAME "old text" "new text"` | Change one passage |
 | `hivenote append NAME "progress"` | Add progress without rewriting the note |
 | `hivenote task NAME "description"` | A new task |
-| `hivenote mark NAME doing` | Move a task along the board (`todo`, `doing`, `done`, `cancelled`); add `"what you did"` to leave a progress line with it. `doing` takes the task, and is refused when another agent has it or has finished it |
+| `hivenote mark NAME doing` | Move a task along the board (`todo`, `doing`, `done`, `cancelled`); add `"what you did"` to leave a progress line with it. `doing` takes the task and prints its text and progress, and is refused when another agent has it or has finished it |
 | `hivenote wait NAME done` | Block until another agent finishes it (`wait NAME` until it is added or changes, `wait` until anything does) |
 
 Agents get short JSON with the parts they act on (`--full` for the whole stored record); when you type a command yourself, you get a readable view. `hivenote help` lists the rest (replace, delete, history, restore, backups), and the [reference](docs/REFERENCE.md) covers all of it.

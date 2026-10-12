@@ -32,7 +32,8 @@ Notes
 Tasks
   hivenote task NAME "description"        a new task
   hivenote tasks                          the board: status, who, how long ago
-  hivenote mark NAME doing                take it; refused if another agent has it or finished it (--anyway overrides)
+  hivenote mark NAME doing                take it, and see its text and progress; refused if another agent has it or
+                                          finished it (--anyway overrides)
   hivenote mark NAME done                 (or todo, cancelled)
   hivenote mark NAME done "what you did"  leave a progress line and mark it, in one go
   hivenote wait NAME [done]               wait until it is done, or until it is added or changes at all
@@ -50,6 +51,7 @@ Machines
   hivenote backup FILE | hivenote mcp
 
 Any text can be - to read it from a file or typed input: hivenote replace notes - < notes.md
+Several commands fit on one line, and && stops at the first that fails: hivenote list && hivenote read NAME
 Shell habits work too: ls (list), cat (read), grep and find (search), rm (delete), log (history)
 --agent NAME  label your changes when several agents share one machine
 --json        print JSON (agents and scripts always get JSON)
@@ -265,6 +267,20 @@ async function take(store: Store, note: string): Promise<unknown> {
   }
 }
 
+/**
+ * A task just marked doing is answered with its text and progress, so starting on it takes one command, not two.
+ * The mark is made by then: if the task cannot be read, the short answer is given as it always was.
+ */
+async function shown(store: Store, note: string, marked: unknown): Promise<unknown> {
+  if (view.human || view.full) return marked;
+  try {
+    const { notes: [task], updates, updates_has_more, seq } = await store.call('read', { names: [note] }) as { notes: unknown[]; updates?: unknown[]; updates_has_more?: boolean; seq?: number };
+    return task ? { ...marked as object, task: { note: task, updates, updates_has_more, seq } } : marked;
+  } catch {
+    return marked;
+  }
+}
+
 /** A --since number from some other hive, or mistyped, would call everything unchanged; refuse it. */
 function notAhead(head: number | undefined): void {
   if (view.since !== undefined && head !== undefined && view.since > head) {
@@ -372,7 +388,10 @@ const NOTES: Record<string, { usage: string; min: number; max: number; run: Run 
         // Not when taking: the line would be left on a task the hive then says is someone else's.
         if (!taking) await store.call('append', { note, body: body(did) });
       }
-      if (!taking) return store.call('update_task', { note, status });
+      if (!taking) {
+        const marked = await store.call('update_task', { note, status });
+        return status === 'doing' ? shown(store, note!, marked) : marked;
+      }
       // Read before the task is taken: text that cannot be saved must not leave the task marked and the caller told only of an error.
       const line = did === undefined ? undefined : body(did);
       if (line === '') fail('The progress line is empty. Nothing was changed');
@@ -383,7 +402,7 @@ const NOTES: Record<string, { usage: string; min: number; max: number; run: Run 
           throw new HiveNoteError(why.code, `'${note}' is marked doing and is yours, but the progress line was not added (${why.message}). Add it with: hivenote append ${word(note!)} "..."`, why.status);
         }
       }
-      return marked;
+      return shown(store, note!, marked);
     },
   },
   wait: {

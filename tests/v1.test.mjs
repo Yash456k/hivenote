@@ -163,14 +163,17 @@ test('taking a task another agent has, or has finished, is refused; other marks 
   const db = join(await sandbox(t, 'heads-up'), 'notes.db');
   const as = (agent, ...words) => cliJson(['--db', db, '--agent', agent, ...words]);
   const refused = async (agent, ...words) => (await run(process.execPath, [cli, '--db', db, '--agent', agent, ...words])).stderr;
-  await as('planner', 'task', 'backend', 'Build the backend');
-  assert.equal((await as('builder', 'mark', 'backend', 'doing')).heads_up, undefined);
+  await as('planner', 'task', 'backend', 'Build the backend', 'Three endpoints, in docs/api.md');
+  await as('planner', 'append', 'backend', 'The schema is in');
+  // A task that is taken is shown, so the agent starts on it without reading it in a second command.
+  const taken = await as('builder', 'mark', 'backend', 'doing');
+  assert.deepEqual([taken.status, taken.content, taken.progress.map(line => line.text), taken.heads_up], ['doing', 'Three endpoints, in docs/api.md', ['The schema is in'], undefined]);
   // It goes by who set the status: the planner rewording the task in between does not hide the builder.
   await as('planner', 'describe', 'backend', 'Build the backend service');
   assert.match(await refused('reviewer', 'mark', 'backend', 'doing', 'Starting on it'), /'backend' is taken: builder marked it doing \d+s ago\. Nothing was changed.*mark backend doing --anyway/u);
   // The builder still has it, and the line that came with the refused mark was not left behind.
   const [held] = (await as('builder', 'read', 'backend')).notes;
-  assert.deepEqual([held.status, held.progress.length], ['doing', 0]);
+  assert.deepEqual([held.status, held.progress.length], ['doing', 1]);
   // Marking a task that is already yours is not refused.
   assert.equal((await as('builder', 'mark', 'backend', 'doing')).was, 'doing');
   // --anyway takes it over, and says whose it was.

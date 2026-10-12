@@ -31,6 +31,12 @@ const PARAMETERS: Record<Method, readonly string[]> = {
 interface Receipt { note: Note; event_seq: number; op_id: string; previous?: Previous }
 
 /**
+ * How many answers to writes are kept for a retry to be given again. A retry comes within seconds,
+ * and each answer holds the whole note: kept forever, they were two thirds of a hive's file.
+ */
+const RECEIPTS_KEPT = 2000;
+
+/**
  * Plain words are searched as words, so names like api-decisions and hosts like
  * stg.example.com just work. Quotes, parentheses, * or AND/OR/NOT/NEAR switch to
  * full-text query syntax.
@@ -86,7 +92,7 @@ export class SqliteStore implements Store {
     return this.execute(method, prepared, this.actor);
   }
 
-  /** Validate, authorize, then run one method. Writes are idempotent by op_id. */
+  /** Validate, authorize, then run one method. A write is made once per op_id, however often it is sent. */
   execute(method: Method, params: Params = {}, actor: Actor = this.actor): unknown {
     if (!isMethod(method)) invalid('Unknown method');
     checkParams(params, PARAMETERS[method], method);
@@ -107,8 +113,14 @@ export class SqliteStore implements Store {
         }
         return JSON.parse(receipt.response as string) as unknown;
       }
+      // A retry that comes after its answer was dropped: the write is in the history, and is not made twice.
+      if (this.get('SELECT 1 FROM events WHERE op_id=?', opId)) {
+        throw new HiveNoteError('op_id_conflict', 'This write was saved earlier, and the answer it was given is no longer kept. Read the note to see it', 409);
+      }
       const result = this.mutate(method, params, attribution(current));
-      this.run('INSERT INTO receipts(op_id,principal,request,response) VALUES(?,?,?,?)', opId, current.principal, request, JSON.stringify(result));
+      const kept = this.run('INSERT INTO receipts(op_id,principal,request,response) VALUES(?,?,?,?)', opId, current.principal, request, JSON.stringify(result));
+      // Older answers go a hundred at a time, so the first write to a hive that kept them all is not a long one.
+      this.run('DELETE FROM receipts WHERE rowid IN (SELECT rowid FROM receipts WHERE rowid<=? ORDER BY rowid LIMIT 100)', Number(kept.lastInsertRowid) - RECEIPTS_KEPT);
       return result;
     });
   }

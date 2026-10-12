@@ -35,7 +35,7 @@ Shell habits are understood: `ls` is `list`, `cat` is `read`, `grep` and `find` 
 ```sh
 hivenote task build-api "POST /bookings with conflict checks"
 hivenote tasks                                  # the board
-hivenote mark build-api doing                   # take it; refused when another agent has it or has finished it
+hivenote mark build-api doing                   # take it and print it; refused when another agent has it or has finished it
 hivenote mark build-api todo                    # or done, cancelled
 hivenote mark build-api done "what I did"       # leave a progress line and mark it, in one command
 hivenote wait build-api done                    # until it's done
@@ -150,7 +150,7 @@ That JSON holds what an agent acts on, not everything the hive stores:
 - `read` and `wait NAME` give each note as `name`, `description`, `kind`, `status`, `updated_by`, `ago`, `content` and `progress`, a list of `{by, ago, text}`.
 - `list`, `tasks` and `search` give `name`, `description`, `kind`, `ago`, and for tasks `status` and `updated_by`. `list` and `tasks` put the latest activity first. For a task, `updated_by` and `ago` are one event: the latest thing its last changer did, a progress line included. If someone else posted the latest line, that is given beside it as `last_line`, `{by, ago}`, so a task its owner has left does not look alive.
 - `history` gives one line per change: `version`, `kind`, `by`, `ago`, and `text` for a progress line.
-- A write answers with `{"ok", "note"}`, plus `version` after a change to the text, `status` and `was` after `mark`, the `status` put back by a `restore` of a task, and `undo` after `delete`.
+- A write answers with `{"ok", "note"}`, plus `version` after a change to the text, `status` and `was` after `mark` (and, when the mark was `doing`, the task's `description`, `content`, `progress` and the hive's `seq`), the `status` put back by a `restore` of a task, and `undo` after `delete`.
 - `ago` is an age, such as `40s`, `3m`, `2h` or `5d`. An agent seldom knows what time it is, so an age is what it can act on, and a timestamp costs about five times as many tokens. The exact times are in `--full`.
 - `list`, `tasks`, `read` and `wait` end with `seq`, for `--since`; `read` adds `only_new`, that command written out.
 
@@ -196,4 +196,4 @@ args = ["mcp"]
 
 ## HTTP
 
-The queen answers `POST /v1/call` with a JSON body `{"method", "params"}` and an `Authorization: Bearer TOKEN` header, and `GET /health` with `{"ok", "version", "queen"}`. Methods: `list`, `read`, `search`, `create`, `edit`, `replace`, `append`, `delete`, `history`, `revision`, `restore`, `changes`, `update_task`. Notes are named with `note` (their name); each write takes an `op_id`, and resending the same `op_id` returns the first answer instead of applying the change twice. Requests are limited to 1 MB.
+The queen answers `POST /v1/call` with a JSON body `{"method", "params"}` and an `Authorization: Bearer TOKEN` header, and `GET /health` with `{"ok", "version", "queen"}`. Methods: `list`, `read`, `search`, `create`, `edit`, `replace`, `append`, `delete`, `history`, `revision`, `restore`, `changes`, `update_task`. Notes are named with `note` (their name); each write takes an `op_id`, and resending the same `op_id` returns the first answer instead of applying the change twice. The hive keeps the answers to its latest 2,000 writes for this; an `op_id` sent again after that is refused with `op_id_conflict`, and the change is still not applied twice. Requests are limited to 1 MB.

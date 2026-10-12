@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { SqliteStore } from '../dist/sqlite.js';
 import { sandbox, fixture, params, actor } from './helpers.mjs';
 
@@ -99,6 +100,21 @@ test('online backup restores notes, history, tombstones, receipts and authentica
   assert.ok((await restored.call('revision', { id: other.note.id, rev: 2 })).note.deleted_at);
   assert.deepEqual(restored.execute('create', request, actor()), created);
   assert.equal(restored.authenticate(token.token).device, 'backup-device');
+});
+
+test('answers to writes are kept for the latest 2,000 only; a retry that comes after that is refused, not written twice', async t => {
+  const { store, dir } = await storeFor(t);
+  const { note } = await store.call('create', fixture({ name: 'busy' }));
+  const first = params({ id: note.id, body: 'line 0' });
+  const answer = store.execute('append', first, actor());
+  assert.deepEqual(store.execute('append', first, actor()), answer);
+  for (let i = 1; i <= 2100; i++) store.execute('replace', params({ id: note.id, description: `Rewritten ${i} times` }), actor());
+  await fail(async () => store.execute('append', first, actor()), 409, 'op_id_conflict');
+  // The note as added, its one line and its 2,100 rewrites, and nothing more.
+  assert.equal((await store.call('history', { id: note.id, limit: 1 })).total, 2102);
+  const file = new DatabaseSync(join(dir, 'notes.sqlite'), { readOnly: true });
+  t.after(() => file.close());
+  assert.equal(file.prepare('SELECT count(*) AS n FROM receipts').get().n, 2000);
 });
 
 test('validation, name collision, read-only scope and reopen persistence', async t => {

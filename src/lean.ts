@@ -13,7 +13,7 @@ import { age, byline, type Event, type Note, type Previous } from './contract.js
  */
 
 type Json = Record<string, unknown>;
-interface Receipt { note: Note; previous?: Previous }
+interface Receipt { note: Note; previous?: Previous; task?: { note: Note; updates?: Event[]; updates_has_more?: boolean; seq?: number } }
 
 /** A note as text to act on: what it is, its state, who changed it last, and what it says. */
 function note(stored: Note, now: number): Json {
@@ -28,7 +28,7 @@ function note(stored: Note, now: number): Json {
 }
 
 /** A note's progress lines, oldest first. */
-function progress(stored: Note, updates: Event[], now: number): Json[] {
+function progress(stored: Note, updates: Event[] = [], now: number): Json[] {
   return updates
     .filter(update => update.note_id === stored.id && update.body !== null)
     .map(update => ({ by: byline(update.attribution), ago: age(update.timestamp, now), text: update.body }));
@@ -150,7 +150,7 @@ export function word(name: string): string {
  * task reopened, a task already being worked on), say so in the answer, so an agent acting
  * on an old look at the board finds out at once and can put it right.
  */
-export function headsUp({ note: task, previous }: Receipt): string | undefined {
+export function headsUp({ note: task, previous, task: shown }: Receipt): string | undefined {
   if (!previous || previous.by === byline(task.last_attribution)) return undefined;
   const ago = age(previous.at, task.updated_at);
   const closed = previous.status === 'done' || previous.status === 'cancelled';
@@ -158,7 +158,8 @@ export function headsUp({ note: task, previous }: Receipt): string | undefined {
     return `This task was ${previous.status} (${previous.by}, ${ago} ago) and you have reopened it. If you had not seen that, read it, and put it back with: hivenote mark ${word(task.name)} ${previous.status}`;
   }
   if (previous.status === 'doing' && task.status === 'doing') {
-    return `${previous.by} marked this doing ${ago} ago and may be working on it. Read its progress before you start: hivenote read ${word(task.name)}`;
+    const look = shown ? 'Its progress is in this answer: check it before you start' : `Read its progress before you start: hivenote read ${word(task.name)}`;
+    return `${previous.by} marked this doing ${ago} ago and may be working on it. ${look}`;
   }
   if (previous.status === 'doing' && task.status === 'todo') {
     return `${previous.by} marked this doing ${ago} ago and you have set it back to todo. If they are still on it, put it back with: hivenote mark ${word(task.name)} doing`;
@@ -172,8 +173,8 @@ const DID: Record<string, string> = {
 };
 
 /** A write is answered with what happened, not with the note that was just sent. */
-function done(command: string, receipt: Receipt): Json {
-  const { note: saved, previous } = receipt;
+function done(command: string, receipt: Receipt, now: number): Json {
+  const { note: saved, previous, task } = receipt;
   const out: Json = { ok: DID[command], note: saved.name };
   if (command === 'task') out.status = saved.status;
   if (command === 'edit' || command === 'replace' || command === 'describe' || command === 'restore') out.version = saved.rev;
@@ -184,6 +185,14 @@ function done(command: string, receipt: Receipt): Json {
     if (previous) out.was = previous.status;
     const warning = headsUp(receipt);
     if (warning) out.heads_up = warning;
+    // A task that was just taken is shown, so whoever took it can start without reading it first.
+    if (task) {
+      out.description = task.note.description;
+      out.content = task.note.content;
+      out.progress = progress(task.note, task.updates, now);
+      if (task.updates_has_more) out.earlier_progress = `hivenote history ${word(saved.name)}`;
+      if (typeof task.seq === 'number') out.seq = task.seq;
+    }
   }
   return out;
 }
@@ -229,7 +238,7 @@ export function lean(command: string, value: unknown, now = Date.now()): unknown
     case 'history':
       return { ...v, events: (v.events as Event[]).map(event => change(event, now)) };
     default:
-      return Object.hasOwn(DID, command) ? done(command, v as unknown as Receipt) : value;
+      return Object.hasOwn(DID, command) ? done(command, v as unknown as Receipt, now) : value;
   }
 }
 
