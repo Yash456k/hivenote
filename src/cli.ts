@@ -105,7 +105,7 @@ interface Words { words: string[]; agent?: string; since?: number; json: boolean
 const SAVES_TEXT = new Set(['add', 'task', 'edit', 'append', 'replace', 'describe']);
 
 /**
- * Only --agent NAME, --since SEQ, --json, --full and --anyway are options (plus help and version); every other word is text.
+ * Only --agent NAME, --since SEQ, --json, --full and (for mark) --anyway are options (plus help and version); every other word is text.
  * The text a command must be given is never read as an option, so a note can say "--help".
  * Help and version count only before the note's name.
  */
@@ -127,7 +127,7 @@ function parse(argv: string[]): Words {
       result.since = Number(seq);
     } else if (word === '--json') result.json = true;
     else if (word === '--full') result.full = true;
-    else if (word === '--anyway') result.anyway = true;
+    else if (word === '--anyway' && (command === undefined || command === 'mark')) result.anyway = true;
     else if (given < 1 && (word === '--help' || word === '-h')) result.help = true;
     else if (given < 1 && (word === '--version' || word === '-v')) result.version = true;
     else result.words.push(word);
@@ -360,8 +360,8 @@ const NOTES: Record<string, { usage: string; min: number; max: number; run: Run 
   },
   mark: {
     usage: `mark NAME ${STATUSES.join('|')} ["what you did"]`, min: 2, max: 3,
-    run: async ([note, word, did], store) => {
-      const status = taskStatus(word!);
+    run: async ([note, state, did], store) => {
+      const status = taskStatus(state!);
       // Marking doing is taking the task, and the hive refuses that when another agent has it or has closed it.
       const taking = status === 'doing' && !view.anyway;
       if (did !== undefined) {
@@ -372,8 +372,17 @@ const NOTES: Record<string, { usage: string; min: number; max: number; run: Run 
         // Not when taking: the line would be left on a task the hive then says is someone else's.
         if (!taking) await store.call('append', { note, body: body(did) });
       }
-      const marked = taking ? await take(store, note!) : await store.call('update_task', { note, status });
-      if (taking && did !== undefined) await store.call('append', { note, body: body(did) });
+      if (!taking) return store.call('update_task', { note, status });
+      // Read before the task is taken: text that cannot be saved must not leave the task marked and the caller told only of an error.
+      const line = did === undefined ? undefined : body(did);
+      if (line === '') fail('The progress line is empty. Nothing was changed');
+      const marked = await take(store, note!);
+      if (line !== undefined) {
+        try { await store.call('append', { note, body: line }); } catch (error) {
+          const why = error instanceof HiveNoteError ? error : new HiveNoteError('internal_error', 'Operation failed', 500);
+          throw new HiveNoteError(why.code, `'${note}' is marked doing and is yours, but the progress line was not added (${why.message}). Add it with: hivenote append ${word(note!)} "..."`, why.status);
+        }
+      }
       return marked;
     },
   },

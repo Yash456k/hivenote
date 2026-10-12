@@ -186,6 +186,21 @@ test('taking a task another agent has, or has finished, is refused; other marks 
   const [entry] = (await as('builder', 'tasks')).notes;
   assert.deepEqual([entry.updated_by, entry.last_line.by], ['planner', 'reviewer']);
 
+  // A line that cannot be saved is found out before the task is taken, and text that says --anyway is text.
+  await as('planner', 'task', 'tests', 'Write the tests', '--anyway');
+  assert.match((await run(process.execPath, [cli, '--db', db, '--agent', 'builder', 'mark', 'tests', 'doing', '-'], { input: '' })).stderr, /progress line is empty\. Nothing was changed/u);
+  const [open] = (await as('planner', 'read', 'tests')).notes;
+  assert.deepEqual([open.status, open.content], ['todo', '--anyway']);
+  // Whoever marked a task still has it after 200 edits by others and after someone moved its due date.
+  await as('builder', 'mark', 'tests', 'doing');
+  const store = new SqliteStore(db, { principal: 'local', device: 'local', scope: 'rw', verified: false, agent: 'scheduler' });
+  try {
+    store.execute('update_task', { note: 'tests', due_at: '2027-01-01T00:00:00Z', op_id: 'due-1' });
+    for (let i = 0; i < 201; i++) store.execute('replace', { note: 'tests', description: `Write the tests, take ${i}`, op_id: `reword-${i}` });
+  } finally { store.close(); }
+  assert.equal((await as('builder', 'mark', 'tests', 'doing')).heads_up, undefined);
+  assert.match(await refused('scheduler', 'mark', 'tests', 'doing'), /'tests' is taken: builder marked it doing/u);
+
   // Asked at the same moment, one agent gets the task and the others are told who did.
   await as('planner', 'task', 'docs', 'Write the docs');
   const asked = await Promise.all(['a', 'b', 'c', 'd'].map(agent => run(process.execPath, [cli, '--db', db, '--agent', agent, 'mark', 'docs', 'doing'])));
