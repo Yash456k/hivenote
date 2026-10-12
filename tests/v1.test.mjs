@@ -159,25 +159,40 @@ test('a task goes by name from start to done, and kebab-case names are searchabl
   assert.match(missing.stderr, /No note named 'nope'/u);
 });
 
-test('a mark that replaces a state another agent set says whose, so an old look at the board is caught', async t => {
+test('taking a task another agent has, or has finished, is refused; other marks say whose state they replaced', async t => {
   const db = join(await sandbox(t, 'heads-up'), 'notes.db');
   const as = (agent, ...words) => cliJson(['--db', db, '--agent', agent, ...words]);
+  const refused = async (agent, ...words) => (await run(process.execPath, [cli, '--db', db, '--agent', agent, ...words])).stderr;
   await as('planner', 'task', 'backend', 'Build the backend');
   assert.equal((await as('builder', 'mark', 'backend', 'doing')).heads_up, undefined);
   // It goes by who set the status: the planner rewording the task in between does not hide the builder.
   await as('planner', 'describe', 'backend', 'Build the backend service');
-  assert.match((await as('reviewer', 'mark', 'backend', 'doing')).heads_up, /builder marked this doing/u);
-  // The reviewer is on it now too, so the next agent hears about the reviewer.
-  assert.match((await as('builder', 'mark', 'backend', 'doing')).heads_up, /reviewer marked this doing/u);
-  await as('builder', 'mark', 'backend', 'done');
+  assert.match(await refused('reviewer', 'mark', 'backend', 'doing', 'Starting on it'), /'backend' is taken: builder marked it doing \d+s ago\. Nothing was changed.*mark backend doing --anyway/u);
+  // The builder still has it, and the line that came with the refused mark was not left behind.
+  const [held] = (await as('builder', 'read', 'backend')).notes;
+  assert.deepEqual([held.status, held.progress.length], ['doing', 0]);
+  // Marking a task that is already yours is not refused.
+  assert.equal((await as('builder', 'mark', 'backend', 'doing')).was, 'doing');
+  // --anyway takes it over, and says whose it was.
+  assert.match((await as('reviewer', 'mark', 'backend', 'doing', '--anyway')).heads_up, /builder marked this doing/u);
+  await as('reviewer', 'mark', 'backend', 'done');
+  assert.match(await refused('builder', 'mark', 'backend', 'doing'), /'backend' is already done: reviewer marked it done \d+s ago.*reopen it all the same/u);
   const reopened = await as('planner', 'mark', 'backend', 'todo');
   assert.equal(reopened.was, 'done');
-  assert.match(reopened.heads_up, /was done \(builder, \d+s ago\) and you have reopened it.*hivenote mark backend done/u);
+  assert.match(reopened.heads_up, /was done \(reviewer, \d+s ago\) and you have reopened it.*hivenote mark backend done/u);
 
   // On the board, a line from someone else does not make the task look alive under the planner's name.
   await as('reviewer', 'append', 'backend', 'Is anyone on this?');
   const [entry] = (await as('builder', 'tasks')).notes;
   assert.deepEqual([entry.updated_by, entry.last_line.by], ['planner', 'reviewer']);
+
+  // Asked at the same moment, one agent gets the task and the others are told who did.
+  await as('planner', 'task', 'docs', 'Write the docs');
+  const asked = await Promise.all(['a', 'b', 'c', 'd'].map(agent => run(process.execPath, [cli, '--db', db, '--agent', agent, 'mark', 'docs', 'doing'])));
+  const got = asked.filter(answer => answer.stdout.includes('"ok":"marked"'));
+  assert.equal(got.length, 1);
+  const owner = (await as('planner', 'read', 'docs')).notes[0].updated_by;
+  assert.equal(asked.filter(answer => answer.stderr.includes(`'docs' is taken: ${owner} marked it doing`)).length, 3);
 });
 
 test('an agent coming back is shown only what is new, and a wait counts from where it last looked', async t => {

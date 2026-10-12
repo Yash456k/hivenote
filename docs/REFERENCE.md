@@ -35,7 +35,8 @@ Shell habits are understood: `ls` is `list`, `cat` is `read`, `grep` and `find` 
 ```sh
 hivenote task build-api "POST /bookings with conflict checks"
 hivenote tasks                                  # the board
-hivenote mark build-api doing                   # todo, doing, done or cancelled
+hivenote mark build-api doing                   # take it; refused when another agent has it or has finished it
+hivenote mark build-api todo                    # or done, cancelled
 hivenote mark build-api done "what I did"       # leave a progress line and mark it, in one command
 hivenote wait build-api done                    # until it's done
 hivenote wait build-api                         # until it changes at all, including progress
@@ -46,7 +47,7 @@ hivenote wait --since 47                        # count changes from an earlier 
 
 A task is a note with a status. The board shows each task's status, who changed it last and how long ago, such as `[doing · codex · 2h ago]`. That is the whole coordination model: nothing is locked, and nothing expires. A task that has said `doing` for hours may belong to an agent that stopped; whoever sees it decides what to do.
 
-Because nothing is locked, an agent can act on an old look at the board. So `mark` says what the task was before (`"was":"doing"`), and adds a `heads_up` when the state it replaced was set by another agent: a finished task reopened, a task someone is on marked `doing` again or set back to `todo`. The mark still happens; the agent that made it is told at once, with the command that puts it back.
+An agent can act on an old look at the board, so taking a task is checked by the hive: `mark NAME doing` is refused with the error `taken`, and changes nothing, when another agent marked the task `doing`, `done` or `cancelled`. The refusal names them and says how long ago. Two agents that ask at the same moment cannot both get the task. `--anyway` marks it all the same, for a task whose agent has stopped or a finished one that has to be reopened. The check is made by the queen, which needs this version; with an older queen the mark happens as before. Every other `mark` still happens whatever the task said: it says what that was (`"was":"doing"`), and adds a `heads_up` when the state it replaced was set by another agent, with the command that puts it back.
 
 `wait` returns within a moment of the change it is waiting for: the hive holds the question open and answers when something happens (a queen older than 0.5 is asked every 5 seconds instead). It waits for up to 9 minutes, then exits with an error, which keeps it under the 10-minute limit agents such as Claude Code put on one command. A script or service with no such limit can end the command with its own: `90s`, `30m`, `2h`, or `forever` to never give up. Waiting for a status checks how things stand first, so a loop that waits again after a timeout misses nothing; the limit word is always the last one, so a note that is itself named `forever` is waited for as `hivenote wait forever forever`. If the note doesn't exist yet, it says so and holds on until someone adds it. With no name, it returns as soon as anything in the hive changes and lists each change: the note, what happened, and who did it. It follows the note it found first, so a different task created later under the same name never counts. If the queen restarts or the network drops while waiting, it keeps checking until its time is up. It only reads, so `hivenote wait build-api done && your-command` is how a script carries on afterwards. When its time is up, the error says where the task stands: `'build-api' did not reach done within 45 seconds. It is doing, last changed 3m ago by codex@laptop`.
 

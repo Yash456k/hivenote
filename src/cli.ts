@@ -32,7 +32,8 @@ Notes
 Tasks
   hivenote task NAME "description"        a new task
   hivenote tasks                          the board: status, who, how long ago
-  hivenote mark NAME doing                (or todo, done, cancelled)
+  hivenote mark NAME doing                take it; refused if another agent has it or finished it (--anyway overrides)
+  hivenote mark NAME done                 (or todo, cancelled)
   hivenote mark NAME done "what you did"  leave a progress line and mark it, in one go
   hivenote wait NAME [done]               wait until it is done, or until it is added or changes at all
   hivenote wait                           wait until anything in the hive changes
@@ -75,7 +76,7 @@ interface LocalStore extends Store {
  * A person at a terminal gets a readable view; agents, scripts and --json get JSON.
  * That JSON is lean, the parts an agent acts on, unless --full asks for the stored record.
  */
-const view: { human: boolean; full: boolean; command: string; since?: number; writtenOut: boolean } = { human: false, full: false, command: '', writtenOut: false };
+const view: { human: boolean; full: boolean; command: string; since?: number; anyway: boolean; writtenOut: boolean } = { human: false, full: false, command: '', anyway: false, writtenOut: false };
 
 /** Said when text arrives with \n typed out: a shell passes those two characters on as they are. */
 function writtenOut(name: string): string {
@@ -98,18 +99,18 @@ function fail(message: string): never {
   throw new HiveNoteError('invalid_args', message);
 }
 
-interface Words { words: string[]; agent?: string; since?: number; json: boolean; full: boolean; help: boolean; version: boolean }
+interface Words { words: string[]; agent?: string; since?: number; json: boolean; full: boolean; anyway: boolean; help: boolean; version: boolean }
 
 /** Commands whose words after the name are text to save, exactly as given. */
 const SAVES_TEXT = new Set(['add', 'task', 'edit', 'append', 'replace', 'describe']);
 
 /**
- * Only --agent NAME, --since SEQ, --json and --full are options (plus help and version); every other word is text.
+ * Only --agent NAME, --since SEQ, --json, --full and --anyway are options (plus help and version); every other word is text.
  * The text a command must be given is never read as an option, so a note can say "--help".
  * Help and version count only before the note's name.
  */
 function parse(argv: string[]): Words {
-  const result: Words = { words: [], json: false, full: false, help: false, version: false };
+  const result: Words = { words: [], json: false, full: false, anyway: false, help: false, version: false };
   for (let i = 0; i < argv.length; i++) {
     const word = argv[i]!;
     const [command] = result.words;
@@ -126,6 +127,7 @@ function parse(argv: string[]): Words {
       result.since = Number(seq);
     } else if (word === '--json') result.json = true;
     else if (word === '--full') result.full = true;
+    else if (word === '--anyway') result.anyway = true;
     else if (given < 1 && (word === '--help' || word === '-h')) result.help = true;
     else if (given < 1 && (word === '--version' || word === '-v')) result.version = true;
     else result.words.push(word);
@@ -243,6 +245,26 @@ async function everything(store: Store, filter: Params): Promise<unknown> {
   return { notes, total: notes.length, ...(seq === undefined ? {} : { seq }) };
 }
 
+/**
+ * Mark a task doing unless another agent has it or has closed it. The refusal says who and how long ago;
+ * here it gains what to do next. An older queen does not know `claim`, and marks as it always did.
+ */
+async function take(store: Store, note: string): Promise<unknown> {
+  try {
+    return await store.call('update_task', { note, status: 'doing', claim: true });
+  } catch (error) {
+    if (!(error instanceof HiveNoteError)) throw error;
+    if (error.code === 'validation_error' && /Unknown parameter/u.test(error.message)) return store.call('update_task', { note, status: 'doing' });
+    if (error.code !== 'taken') throw error;
+    const name = word(note);
+    const closed = (error.details as { status?: string } | undefined)?.status !== 'doing';
+    const next = closed
+      ? `Read what was done: hivenote read ${name}. To reopen it all the same: hivenote mark ${name} doing --anyway`
+      : `Pick another task, or read its progress: hivenote read ${name}. If that agent has stopped, ask the user before taking it over with: hivenote mark ${name} doing --anyway`;
+    throw new HiveNoteError('taken', `${error.message}. ${next}`, error.status);
+  }
+}
+
 /** A --since number from some other hive, or mistyped, would call everything unchanged; refuse it. */
 function notAhead(head: number | undefined): void {
   if (view.since !== undefined && head !== undefined && view.since > head) {
@@ -340,14 +362,19 @@ const NOTES: Record<string, { usage: string; min: number; max: number; run: Run 
     usage: `mark NAME ${STATUSES.join('|')} ["what you did"]`, min: 2, max: 3,
     run: async ([note, word, did], store) => {
       const status = taskStatus(word!);
+      // Marking doing is taking the task, and the hive refuses that when another agent has it or has closed it.
+      const taking = status === 'doing' && !view.anyway;
       if (did !== undefined) {
         // Checked first, so a line is not left behind on something the mark is then refused for.
         const { notes: [found] } = await store.call('read', { names: [note!] }) as { notes: { kind: string }[] };
         if (found && found.kind !== 'task') throw new HiveNoteError('validation_error', `'${note}' is a note, not a task, so it has no status to mark. Nothing was added`);
         // The progress line goes first, so whoever is waiting for the status finds it already there.
-        await store.call('append', { note, body: body(did) });
+        // Not when taking: the line would be left on a task the hive then says is someone else's.
+        if (!taking) await store.call('append', { note, body: body(did) });
       }
-      return store.call('update_task', { note, status });
+      const marked = taking ? await take(store, note!) : await store.call('update_task', { note, status });
+      if (taking && did !== undefined) await store.call('append', { note, body: body(did) });
+      return marked;
     },
   },
   wait: {
@@ -596,7 +623,7 @@ const MACHINE = ['serve', 'ui', 'connect', 'disconnect', 'status', 'token', 'bac
 const RENAMED: Record<string, string> = {
   create: 'add NAME "description" "text" (or task NAME "description" for a task)',
   'update-task': 'mark NAME doing|done',
-  claim: 'mark NAME doing (claims are gone; the task shows who is on it and since when)',
+  claim: 'mark NAME doing (it is refused when another agent has the task)',
   release: 'mark NAME todo',
   revision: 'history NAME',
   changes: 'history NAME',
@@ -626,7 +653,7 @@ function unknownCommand(command: string): never {
 // ---------- Main ----------
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
-  const { words, agent, since, json, full, help, version } = parse(argv);
+  const { words, agent, since, json, full, anyway, help, version } = parse(argv);
   // Readable output only for a person typing in a terminal: never for a detected agent or --agent.
   view.human = process.stdout.isTTY === true && !json && !full && agent === undefined && detectAgent() === undefined;
   view.full = full;
@@ -661,6 +688,10 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   if (since !== undefined) {
     if (command !== 'read' && command !== 'wait') fail('--since goes with read or wait: hivenote read NAME --since 47');
     view.since = since;
+  }
+  if (anyway) {
+    if (command !== 'mark') fail('--anyway goes with mark: hivenote mark NAME doing --anyway');
+    view.anyway = true;
   }
   if (words.length < spec.min || words.length > spec.max) fail(`Usage: hivenote ${spec.usage}`);
   const store = await openStore(config);

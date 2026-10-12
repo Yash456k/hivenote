@@ -27,7 +27,7 @@ const schemas: Record<Method, z.ZodType> = {
   revision: z.object({ note, rev: revision }).strict(),
   restore: z.object({ note, rev: revision, ...operation }).strict(),
   changes: z.object({ since: integer.optional(), limit: z.number().int().positive().optional(), tail: z.number().int().positive().max(100).optional() }).strict(),
-  update_task: z.object({ note, status: status.optional(), due_at: due.optional(), metadata: metadata.optional(), ...operation }).strict(),
+  update_task: z.object({ note, status: status.optional(), due_at: due.optional(), metadata: metadata.optional(), claim: z.literal(true).optional(), ...operation }).strict(),
 };
 const descriptions: Record<Method, string> = {
   list: 'List notes by name and description (brief by default) to decide what to read. No content.',
@@ -42,7 +42,7 @@ const descriptions: Record<Method, string> = {
   revision: 'Read an immutable saved content revision.',
   restore: 'Undo: bring back a version from history (rev), including for deleted notes.',
   changes: 'Read the global change feed after since, or the newest `tail` events; continue with the returned cursor.',
-  update_task: 'Mark a task todo, doing, done or cancelled. The task then shows who changed it and when.',
+  update_task: 'Mark a task todo, doing, done or cancelled. The task then shows who changed it and when. To take a task, send status doing with claim true: it is refused if another agent has the task or has closed it.',
 };
 export interface McpOptions { agent?: string; session?: string; }
 export function createMcpServer(store: Store, options: McpOptions = {}): McpServer {

@@ -54,14 +54,14 @@ If an `edit` fails because the old text no longer matches, another agent changed
 ```sh
 hivenote tasks                                   # the board: status, who changed it last, how long ago
 hivenote task build-api 'Build the booking API'
-hivenote mark build-api doing                    # tells others you are on it
+hivenote mark build-api doing                    # takes it: tells others you are on it
 hivenote append build-api 'Schema is in; endpoints next'
 hivenote mark build-api done 'What I did and what is left'   # leaves that as a progress line, then marks it
 ```
 
-`mark NAME doing` puts your name and the time on the task. It does not lock anything: if a task has said "doing" for hours, the agent on it may have stopped. Check its progress, and ask the user before taking it over.
+`mark NAME doing` takes the task: it puts your name and the time on it. It is refused, and nothing changes, when another agent already has the task or has finished it. The answer says who and how long ago. Your picture of the board was old: pick another task, or read that one. If a task has said "doing" for hours, the agent on it may have stopped. Check its progress, and ask the user before taking it over with `hivenote mark NAME doing --anyway`.
 
-When the answer to `mark` carries a `heads_up`, you have just replaced a state another agent set: you reopened a task they finished, or marked `doing` a task they are on. Your picture of the board was probably old. Read the task before going on, and put the status back if they were right.
+When the answer to another `mark` carries a `heads_up`, you have just replaced a state another agent set, such as setting a finished task back to `todo`. Read the task before going on, and put the status back if they were right.
 
 When you finish a task, **say what you did as you mark it done**, so whoever picks it up next knows the state.
 

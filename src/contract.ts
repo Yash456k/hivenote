@@ -76,8 +76,10 @@ export function clientParams(method: Method, params: Params = {}): Params {
  restore {note|id,rev,op_id} (deleted ID allowed)
  changes {since?:seq,limit?,hold?:ms} | {tail:1-100} => {events:Event[],cursor,has_more}
  hold (at most 8000) keeps the question open until something comes after since, or the time is up; how wait wakes at once.
- update_task {note|id,status?,due_at?:ISO|null,metadata?,op_id}
+ update_task {note|id,status?,due_at?:ISO|null,metadata?,claim?:true,op_id}
  Every mutation returns immutable {note:Note,event_seq:number,op_id:string}; append leaves rev unchanged.
  update_task with a status also returns previous:{status,by,at}, what the task said before.
+ claim (with status doing) takes the task only if nobody else has it: when another agent marked it doing, done or
+ cancelled, nothing changes and the answer is the error taken, 409, details {status,by,at}.
  All errors HiveNoteError; conflict 409 details {current:Note}. Metadata/references inert.
  */

@@ -2,7 +2,7 @@ import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, unlinkSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { byline, clientParams, isMethod, MUTATIONS, HiveNoteError, type Actor, type Attribution, type Event, type Method, type Note, type Params, type Previous, type Store } from './contract.js';
+import { age, byline, clientParams, isMethod, MUTATIONS, HiveNoteError, type Actor, type Attribution, type Event, type Method, type Note, type Params, type Previous, type Store } from './contract.js';
 import { openDatabase, storageError, transaction } from './database.js';
 import { held, HOLD_LIMIT_MS } from './wait.js';
 import { due, id, integer, invalid, json, LIMITS, metadata, params as checkParams, status, STATUSES, text } from './validate.js';
@@ -24,7 +24,7 @@ const PARAMETERS: Record<Method, readonly string[]> = {
   revision: ['id', 'note', 'rev'],
   restore: ['id', 'note', 'rev', 'op_id'],
   changes: ['since', 'limit', 'tail', 'hold'],
-  update_task: ['id', 'note', 'status', 'due_at', 'metadata', 'op_id'],
+  update_task: ['id', 'note', 'status', 'due_at', 'metadata', 'claim', 'op_id'],
 };
 
 
@@ -157,6 +157,16 @@ export class SqliteStore implements Store {
       case 'update_task':
         // Marking never locks, so the answer says whose state was replaced; the caller can then think again.
         if (p.status !== undefined) previous = { status: note.status, ...this.statusSetter(note) };
+        if (p.claim !== undefined) {
+          if (p.claim !== true || p.status !== 'doing') invalid('claim is true, and goes with status doing');
+          // Taking a task is the one mark that must not go by an old look at the board: checked here, inside the
+          // write, two agents asking at the same moment cannot both be told the task is theirs.
+          const held = note.status === 'doing' || note.status === 'done' || note.status === 'cancelled';
+          if (held && previous!.by !== byline(who)) {
+            const state = note.status === 'doing' ? 'is taken' : `is already ${note.status}`;
+            throw new HiveNoteError('taken', `'${note.name}' ${state}: ${previous!.by} marked it ${note.status} ${age(previous!.at, now)} ago. Nothing was changed`, 409, previous);
+          }
+        }
         applyTaskUpdate(note, p);
         break;
       default: invalid('Unsupported mutation');
