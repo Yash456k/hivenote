@@ -9,8 +9,6 @@ export interface HttpStoreOptions {
   fetch?: typeof fetch;
   /** Leave the version warning to whoever reads serverVersion. */
   quiet?: boolean;
-  /** merge from a temporary queen: these writes are someone else's, passed on, and are kept as unverified. */
-  relayed?: boolean;
 }
 
 /**
@@ -42,7 +40,6 @@ export class HttpStore implements Store {
   private readonly labels: { agent?: string; session?: string };
   private readonly send: typeof fetch;
   private readonly quiet: boolean;
-  private readonly relayed: boolean;
   /** The version the hive last said it runs. */
   serverVersion: string | null = null;
   private versionChecked = false;
@@ -55,7 +52,6 @@ export class HttpStore implements Store {
     this.labels = {};
     this.send = options.fetch ?? fetch;
     this.quiet = options.quiet ?? false;
-    this.relayed = options.relayed ?? false;
     this.setAttribution(options);
   }
   /** Labels are self-reported data; never authentication or authorization. */
@@ -82,7 +78,7 @@ export class HttpStore implements Store {
     for (let attempt = 0; ; attempt++) {
       let response: Response;
       try {
-        response = await this.send(this.endpoint, { method: 'POST', redirect: 'error', headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}`, ...(this.relayed ? { 'x-hivenote-relayed': '1' } : {}) }, body, signal: AbortSignal.timeout(timeoutMs) });
+        response = await this.send(this.endpoint, { method: 'POST', redirect: 'error', headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}` }, body, signal: AbortSignal.timeout(timeoutMs) });
       } catch {
         if (attempt < retries) { await pause(attempt); continue; }
         throw new HiveNoteError('transport_error', 'Unable to reach HiveNote server', 503);

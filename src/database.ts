@@ -1,12 +1,12 @@
 import { DatabaseSync } from 'node:sqlite';
-import { chmodSync, closeSync, mkdirSync, openSync, statSync, unlinkSync } from 'node:fs';
+import { chmodSync, closeSync, mkdirSync, openSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { HiveNoteError } from './contract.js';
 import { invalid } from './validate.js';
 
 /** Opening the SQLite file, running transactions, and the schema. */
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 1;
 
 const SCHEMA = `
   CREATE TABLE notes (
@@ -60,24 +60,11 @@ const SCHEMA = `
     scope TEXT NOT NULL CHECK(scope IN ('ro','rw')),
     revoked INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
-    revoked_at TEXT,
-    -- 1 for a token that may also copy the hive, its token hashes included, to keep a standby copy.
-    standby INTEGER NOT NULL DEFAULT 0
+    revoked_at TEXT
   );
 
   PRAGMA user_version=${SCHEMA_VERSION};
 `;
-
-/**
- * What takes a file from the version before to each version. Only additions: a file is upgraded, never recreated,
- * and nothing a user wrote is changed.
- */
-const MIGRATIONS: Record<number, (db: DatabaseSync) => void> = {
-  // 1.0: a token may be a standby token. Skipped when the column is there already (a file put back to version 1 by hand).
-  2: db => {
-    if (!db.prepare("SELECT 1 FROM pragma_table_info('clients') WHERE name='standby'").get()) db.exec('ALTER TABLE clients ADD COLUMN standby INTEGER NOT NULL DEFAULT 0;');
-  },
-};
 
 /** Turn SQLite errors into safe HiveNote errors; never leak SQL text. */
 export function storageError(error: unknown): never {
@@ -145,46 +132,15 @@ export function openDatabase(path: string): DatabaseSync {
       throw new HiveNoteError('schema_version', 'This hive was made by a newer HiveNote; update HiveNote on this machine to open it', 500);
     }
     retryWhileBusy(() => db.exec('PRAGMA journal_mode=WAL;'));
-    // Serialized by the write lock, so two processes opening a file create or upgrade it once.
+    // Serialized by the write lock, so two processes opening a new file migrate it once.
     transaction(db, () => {
       const version = Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version);
       if (version > SCHEMA_VERSION) throw new HiveNoteError('schema_version', 'This hive was made by a newer HiveNote; update HiveNote on this machine to open it', 500);
-      if (version === 0) { db.exec(SCHEMA); return; }
-      if (version === SCHEMA_VERSION) return;
-      // A file from an older HiveNote is copied as it is, then upgraded in this same transaction.
-      keepCopy(path, `${path}.before-v${SCHEMA_VERSION}`);
-      for (let next = version + 1; next <= SCHEMA_VERSION; next++) { MIGRATIONS[next]!(db); db.exec(`PRAGMA user_version=${next};`); }
+      if (version === 0) db.exec(SCHEMA);
     });
   } catch (error) {
     db.close();
     storageError(error);
   }
   return db;
-}
-
-/**
- * A consistent copy of the file, private like it, made while the caller holds the write lock, so it is the file
- * as it was before the upgrade. A file already at that path (an earlier upgrade's copy, or one cut short) is never
- * replaced or trusted: this copy then goes beside it, with the time in its name.
- */
-function keepCopy(path: string, wanted: string): void {
-  let copy = wanted;
-  for (;;) {
-    try {
-      closeSync(openSync(copy, 'wx', 0o600));
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      copy = `${wanted}-${new Date().toISOString().replace(/[:.]/gu, '-')}-${Math.random().toString(36).slice(2, 6)}`;
-    }
-  }
-  const reader = new DatabaseSync(path, { readOnly: true });
-  try {
-    reader.prepare('VACUUM INTO ?').run(copy);
-  } catch (error) {
-    unlinkSync(copy);
-    throw error;
-  } finally {
-    reader.close();
-  }
 }

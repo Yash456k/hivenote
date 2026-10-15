@@ -14,7 +14,7 @@ import { age, byline, type Event, type Note, type Previous } from './contract.js
 
 type Json = Record<string, unknown>;
 interface Receipt {
-  note: Note; previous?: Previous; after?: string[]; taken_over?: { from: string; at: string };
+  note: Note; previous?: Previous; after?: string[]; taken_over?: { from: string; at: string }; waiting?: string[];
   task?: { note: Note; updates?: Event[]; updates_has_more?: boolean; seq?: number };
 }
 
@@ -193,6 +193,7 @@ function done(command: string, receipt: Receipt, now: number): Json {
     if (taken_over) out.taken_over = { from: taken_over.from, idle: age(taken_over.at, saved.updated_at) };
     const warning = headsUp(receipt);
     if (warning) out.heads_up = warning;
+    if (receipt.waiting?.length) out.heads_up = `${warning ? `${warning} ` : ''}${receipt.waiting.join(', ')} waited on this and no longer ${receipt.waiting.length === 1 ? 'does' : 'do'}. Check whether ${receipt.waiting.length === 1 ? 'it still makes' : 'they still make'} sense; cancel or delete ${receipt.waiting.length === 1 ? 'it' : 'them'} if not`;
     // A task that was just taken is shown, so whoever took it can start without reading it first.
     if (task) {
       out.description = task.note.description;

@@ -32,10 +32,10 @@ const PARAMETERS: Record<Method, readonly string[]> = {
  * A task (as `n`) that waits on a live task that is not done. A deleted task is no longer waited on,
  * and restoring it brings the wait back, since the id stays in the waiting task's metadata.
  */
-const BLOCKED = `(coalesce(json_type(n.metadata,'$.after'),'')='array' AND EXISTS (SELECT 1 FROM json_each(n.metadata,'$.after') a JOIN notes p ON p.id=a.value AND p.deleted_at IS NULL WHERE p.status IS NOT 'done'))`;
+const BLOCKED = `(coalesce(json_type(n.metadata,'$.after'),'')='array' AND EXISTS (SELECT 1 FROM json_each(n.metadata,'$.after') a JOIN notes p ON p.id=a.value AND p.deleted_at IS NULL WHERE p.status NOT IN ('done','cancelled')))`;
 
-/** How long a doing task can go without anything happening on it before another agent may take it over. */
-export const TAKEOVER_MS = 2 * 3600 * 1000;
+/** How long a doing task can go idle before another agent may take it over: off unless the hive's config.json sets takeover. */
+export const TAKEOVER_MS = 0;
 
 
 interface Receipt {
@@ -44,6 +44,8 @@ interface Receipt {
   after?: string[];
   /** A doing task taken from an agent that had gone quiet: who had it, and when anything last happened on it. */
   taken_over?: { from: string; at: string };
+  /** After a task is cancelled: the open tasks that waited on it, which now go ahead without it. */
+  waiting?: string[];
 }
 
 /**
@@ -89,15 +91,12 @@ export class SqliteStore implements Store {
   readonly path: string;
   /** 0 means a doing task is never taken over. */
   private readonly takeoverMs: number;
-  /** A temporary queen keeps the answer to every write: they are what `merge` sends to the main queen. */
-  private readonly keepReceipts: boolean;
 
-  constructor(path: string, private actor: Actor = localActor(), options: { takeoverMs?: number; keepReceipts?: boolean } = {}) {
+  constructor(path: string, private actor: Actor = localActor(), options: { takeoverMs?: number } = {}) {
     // Callers with direct file access may label themselves, but are never token-verified.
     this.actor = { ...actor, verified: false };
     this.path = resolve(path);
     this.takeoverMs = options.takeoverMs ?? TAKEOVER_MS;
-    this.keepReceipts = options.keepReceipts ?? false;
     this.db = openDatabase(this.path);
   }
 
@@ -142,7 +141,7 @@ export class SqliteStore implements Store {
       const result = this.mutate(method, params, attribution(current));
       const kept = this.run('INSERT INTO receipts(op_id,principal,request,response) VALUES(?,?,?,?)', opId, current.principal, request, JSON.stringify(result));
       // Older answers go a hundred at a time, so the first write to a hive that kept them all is not a long one.
-      if (!this.keepReceipts) this.run('DELETE FROM receipts WHERE rowid IN (SELECT rowid FROM receipts WHERE rowid<=? ORDER BY rowid LIMIT 100)', Number(kept.lastInsertRowid) - RECEIPTS_KEPT);
+      this.run('DELETE FROM receipts WHERE rowid IN (SELECT rowid FROM receipts WHERE rowid<=? ORDER BY rowid LIMIT 100)', Number(kept.lastInsertRowid) - RECEIPTS_KEPT);
       return result;
     });
   }
@@ -238,6 +237,11 @@ export class SqliteStore implements Store {
     const receipt = this.record(note, eventKind, p, who, now);
     if (previous) receipt.previous = previous;
     if (takenOver) receipt.taken_over = takenOver;
+    // Cancelling a task no longer holds up the tasks that wait on it; whoever cancelled it is told which, to look at them.
+    if (method === 'update_task' && p.status === 'cancelled') {
+      const waiting = this.all(`SELECT name FROM notes n WHERE deleted_at IS NULL AND kind='task' AND status IN ('todo','doing') AND coalesce(json_type(metadata,'$.after'),'')='array' AND EXISTS (SELECT 1 FROM json_each(metadata,'$.after') a WHERE a.value=?) ORDER BY name`, note.id).map(row => row.name as string);
+      if (waiting.length) receipt.waiting = waiting;
+    }
     if (p.after !== undefined || p.not_after !== undefined) receipt.after = this.afterNames(note);
     if (method === 'append') this.index(note);
     return receipt;
@@ -300,7 +304,7 @@ export class SqliteStore implements Store {
     for (const note of notes) {
       if (note.kind !== 'task' || !afterIds(note).length) continue;
       const open = afterIds(note).flatMap(id => {
-        const row = this.get("SELECT name FROM notes WHERE id=? AND deleted_at IS NULL AND status IS NOT 'done'", id);
+        const row = this.get("SELECT name FROM notes WHERE id=? AND deleted_at IS NULL AND status NOT IN ('done','cancelled')", id);
         return row ? [row.name as string] : [];
       });
       if (open.length) waiting.set(note.id, open);
@@ -580,25 +584,23 @@ export class SqliteStore implements Store {
     if (this.actor.scope !== 'rw') throw new HiveNoteError('forbidden', message, 403);
   }
 
-  /** A standby token reads and writes like any other, and may also copy the hive for a standby copy. */
-  tokenCreate(device: string, scope: 'ro' | 'rw' = 'rw', standby = false): { id: string; principal: string; device: string; scope: 'ro' | 'rw'; standby: boolean; token: string } {
+  tokenCreate(device: string, scope: 'ro' | 'rw' = 'rw'): { id: string; principal: string; device: string; scope: 'ro' | 'rw'; token: string } {
     this.requireLocalWriter('Read-only actor cannot administer tokens');
     text(device, 'device', LIMITS.label);
     if (scope !== 'ro' && scope !== 'rw') invalid('scope must be ro or rw');
-    if (standby && scope !== 'rw') invalid('A standby token is read/write');
     const token = randomBytes(32).toString('base64url');
     const client = { id: randomUUID(), principal: randomUUID() };
     // Only the hash is stored; the token is shown once.
     transaction(this.db, () => this.run(
-      'INSERT INTO clients(id,principal,device,token_hash,scope,created_at,standby) VALUES(?,?,?,?,?,?,?)',
-      client.id, client.principal, device, sha256(token), scope, new Date().toISOString(), standby ? 1 : 0,
+      'INSERT INTO clients(id,principal,device,token_hash,scope,created_at) VALUES(?,?,?,?,?,?)',
+      client.id, client.principal, device, sha256(token), scope, new Date().toISOString(),
     ));
-    return { ...client, device, scope, standby, token };
+    return { ...client, device, scope, token };
   }
 
   tokenList(): Row[] {
     this.requireLocalWriter('Token administration is local read/write only');
-    return this.all('SELECT id,principal,device,scope,standby,revoked,created_at,revoked_at FROM clients ORDER BY created_at,id');
+    return this.all('SELECT id,principal,device,scope,revoked,created_at,revoked_at FROM clients ORDER BY created_at,id');
   }
 
   /** Revoke every active token for a device label, such as laptop. Returns how many. */
@@ -614,79 +616,9 @@ export class SqliteStore implements Store {
 
   authenticate(token: string): Actor {
     if (typeof token !== 'string' || token.length < 40 || token.length > 256) throw new HiveNoteError('unauthorized', 'Invalid or revoked token', 401);
-    const row = this.get('SELECT principal,device,scope,standby FROM clients WHERE token_hash=? AND revoked=0', sha256(token));
+    const row = this.get('SELECT principal,device,scope FROM clients WHERE token_hash=? AND revoked=0', sha256(token));
     if (!row) throw new HiveNoteError('unauthorized', 'Invalid or revoked token', 401);
-    return { principal: row.principal as string, device: row.device as string, scope: row.scope as 'ro' | 'rw', verified: true, ...(row.standby ? { standby: true } : {}) };
-  }
-
-  // ---------- A standby copy ----------
-  // A worker keeps a copy of the queen's hive by following her feed of changes, and can serve it while she is down.
-
-  /** Every token, hashes included, for a standby copy. The server gives them only to a standby token. */
-  standbyTokens(): Row[] {
-    return this.all('SELECT id,principal,device,token_hash,scope,standby,revoked,created_at,revoked_at FROM clients ORDER BY created_at,id');
-  }
-
-  /** Make this copy's tokens the queen's, so the tokens workers hold work here too. */
-  copyTokens(rows: Row[]): void {
-    const columns = ['id', 'principal', 'device', 'token_hash', 'scope', 'standby', 'revoked', 'created_at', 'revoked_at'];
-    transaction(this.db, () => {
-      this.run('DELETE FROM clients');
-      for (const row of rows) this.run(`INSERT INTO clients(${columns.join(',')}) VALUES(${columns.map(() => '?').join(',')})`, ...columns.map(column => (row[column] ?? null) as SQLInputValue));
-    });
-  }
-
-  /**
-   * Add the queen's changes after `cursor`, with her numbers, ids and versions, and bring the notes up to date.
-   * Refused when anything else wrote to this copy since, such as workers while it served as a temporary queen.
-   */
-  follow(events: Event[], cursor: number): number {
-    return transaction(this.db, () => {
-      if (this.seq() !== cursor) throw new HiveNoteError('conflict', 'This copy has changed since it last followed the queen', 409);
-      const touched = new Set<string>();
-      for (const event of events) {
-        if (event.snapshot) this.save(event.snapshot, !this.get('SELECT 1 FROM notes WHERE id=?', event.note_id));
-        else this.run('UPDATE notes SET activity_at=?,last_activity_attribution=? WHERE id=?', event.timestamp, JSON.stringify(event.attribution), event.note_id);
-        this.run(
-          'INSERT INTO events(seq,note_id,kind,revision,snapshot,body,op_id,attribution,timestamp) VALUES(?,?,?,?,?,?,?,?,?)',
-          event.seq, event.note_id, event.kind, event.revision, event.snapshot === null ? null : JSON.stringify(event.snapshot), event.body, event.op_id, JSON.stringify(event.attribution), event.timestamp,
-        );
-        touched.add(event.note_id);
-      }
-      for (const id of touched) this.index(toNote(this.get('SELECT * FROM notes WHERE id=?', id)!));
-      return events.at(-1)?.seq ?? cursor;
-    });
-  }
-
-  /** The number of the latest change in this hive, and how many came after `seq`. */
-  changeCount(seq = 0): { latest: number; after: number } {
-    return { latest: this.seq(), after: Number(this.get('SELECT count(*) AS n FROM events WHERE seq>?', seq)?.n) };
-  }
-
-  /** The op_id of change number `seq`, to tell whether a copy is of the same hive. */
-  opIdAt(seq: number): string | undefined {
-    return this.get('SELECT op_id FROM events WHERE seq=?', seq)?.op_id as string | undefined;
-  }
-
-  /** Whether this hive has a change with this op_id. */
-  knows(opId: string): boolean {
-    return this.get('SELECT 1 FROM events WHERE op_id=?', opId) !== undefined;
-  }
-
-  /** How many changes a note had up to change number `seq`. */
-  changesOf(noteId: string, seq: number): number {
-    return Number(this.get('SELECT count(*) AS n FROM events WHERE note_id=? AND seq<=?', noteId, seq)?.n);
-  }
-
-  /**
-   * The writes made here, oldest first: each as it was asked for, the note as it left it, and who made it.
-   * A standby copy gets its notes from the queen's feed, which has no answers, so these are the temporary queen's own.
-   */
-  writesMadeHere(): { method: Method; params: Params; note: Note; attribution: Attribution }[] {
-    return this.all('SELECT r.request, r.response, e.attribution FROM receipts r JOIN events e ON e.op_id=r.op_id ORDER BY r.rowid').map(row => {
-      const { method, params } = JSON.parse(row.request as string) as { method: Method; params: Params };
-      return { method, params, note: (JSON.parse(row.response as string) as Receipt).note, attribution: JSON.parse(row.attribution as string) as Attribution };
-    });
+    return { principal: row.principal as string, device: row.device as string, scope: row.scope as 'ro' | 'rw', verified: true };
   }
 
   /** A consistent, integrity-checked copy of the database at a new path. */
@@ -722,7 +654,7 @@ function attribution(actor: Actor): Attribution {
   const result: Attribution = {
     principal: text(actor.principal, 'principal', LIMITS.label),
     device: text(actor.device, 'device', LIMITS.label),
-    verified: actor.verified && !actor.relayed,
+    verified: actor.verified,
     labels_verified: false,
   };
   if (actor.agent !== undefined) result.agent = text(actor.agent, 'agent', LIMITS.label);

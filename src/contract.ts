@@ -12,10 +12,6 @@ export interface Store { call(method: Method, params?: Params): Promise<unknown>
 export interface Actor {
   principal: string; device: string; scope: 'ro'|'rw'; verified: boolean;
   agent?: string; session?: string;
-  /** A standby token: it may also copy the hive's tokens, to keep a standby copy. */
-  standby?: boolean;
-  /** A write a temporary queen's merge passes on for someone else: recorded as unverified, since the token is not theirs. */
-  relayed?: boolean;
 }
 export interface Attribution { principal: string; device: string; verified: boolean; labels_verified: false; agent?: string; session?: string; }
 export interface Note {
@@ -92,6 +88,6 @@ export function clientParams(method: Method, params: Params = {}): Params {
  update_task with a status also returns previous:{status,by,at}, what the task said before.
  claim (with status doing) takes the task only if nobody else has it: when another agent marked it doing, done or
  cancelled, nothing changes and the answer is the error taken, 409, details {status,by,at}. A doing task with nothing
- done on it for the takeover time (2h unless set) is taken all the same, and the answer has taken_over:{from,at}.
+ done on it for the takeover time (off unless set in the hive's config.json) is taken all the same, and the answer has taken_over:{from,at}.
  All errors HiveNoteError; conflict 409 details {current:Note}. Metadata/references inert.
  */

@@ -55,19 +55,19 @@ hivenote wait --since 47                        # count changes from an earlier 
 
 A task is a note with a status. The board shows each task's status, who changed it last and how long ago, and what it waits on, such as `[todo · planner · 2h ago · waits on build-api]`. That is the whole coordination model: nothing is locked.
 
-**Waiting on other tasks.** `--after` names the tasks a new task waits on, separated by commas (or give `--after` more than once). `hivenote after NAME OTHER...` adds to them later and `hivenote after NAME not OTHER...` removes some; both answer with everything the task now waits on, as `after`. A task is ready when it is `todo` and each task it waits on is `done`; a `cancelled` one still holds it up, and a deleted one no longer does (restoring it brings the wait back). `tasks`, `list` and `read` give the ones not done yet as `waits_on`. A task can wait only on tasks, never on itself, and never on one that already waits on it, directly or through others. The hive keeps the tasks by their IDs, so renaming one keeps every link to it, and the screen always shows their current names. `mark` does not check them: marking a waiting task `doing` is allowed, for whoever knows better.
+**Waiting on other tasks.** `--after` names the tasks a new task waits on, separated by commas (or give `--after` more than once). `hivenote after NAME OTHER...` adds to them later and `hivenote after NAME not OTHER...` removes some; both answer with everything the task now waits on, as `after`. A task is ready when it is `todo` and each task it waits on is `done` or `cancelled`; a deleted one no longer holds it up either (restoring it brings the wait back). Cancelling a task that others wait on lets them go ahead without it, and the answer names them in `heads_up`, so whoever cancelled it can check whether they still make sense and cancel or delete them if not. `tasks`, `list` and `read` give the ones still open as `waits_on`. A task can wait only on tasks, never on itself, and never on one that already waits on it, directly or through others. The hive keeps the tasks by their IDs, so renaming one keeps every link to it, and the screen always shows their current names. `mark` does not check them: marking a waiting task `doing` is allowed, for whoever knows better.
 
 **Taking a task.** `hivenote ready` lists the ready tasks, oldest first. `hivenote take` takes the first of them in one step and answers as `mark NAME doing` does, with `"ok":"taken"`. The queen picks the task and marks it inside one write, so agents that ask at the same moment each get a different one. When none is ready, it takes a task whose agent has gone quiet (below). When there is nothing at all, it exits with the error `nothing_ready`, which says how many tasks wait on others and how many are being done, so `hivenote take && ...` stops there.
 
 An agent can act on an old look at the board, so taking a task is checked by the hive: `mark NAME doing` is refused with the error `taken`, and changes nothing, when another agent marked the task `doing`, `done` or `cancelled`. The refusal names them and says how long ago. Two agents that ask at the same moment cannot both get the task. `--anyway` marks it all the same, for a finished task that has to be reopened, or a task whose agent you know has stopped. The check is made by the queen when the machine that asks is on 0.5 or newer too; with an older queen, or from an older worker, the mark happens as before. Every other `mark` still happens whatever the task said: it says what that was (`"was":"doing"`), and adds a `heads_up` when the state it replaced was set by another agent, with the command that puts it back.
 
-**A task whose agent stopped.** An agent that dies leaves its task `doing`. Once nothing has happened on such a task for 2 hours (no mark, no edit, no progress line from anyone), `mark NAME doing` and `take` take it without `--anyway`, and the answer says from whom and for how long it was idle: `"taken_over":{"from":"builder@laptop","idle":"3h"}`. Its progress is in the same answer. The time is set on the machine that holds the hive (the queen, or this machine for a local hive) with a line in its `config.json`, read when a command or `serve` starts:
+**A task whose agent stopped.** An agent that dies leaves its task `doing`. By default it stays that way until someone marks it with `--anyway`. To let such tasks be picked up on their own, set a takeover time on the machine that holds the hive (the queen, or this machine for a local hive) with a line in its `config.json`, read when a command or `serve` starts. Once nothing has happened on a task for that long (no mark, no edit, no progress line from anyone), `mark NAME doing` and `take` take it without `--anyway`, and the answer says from whom and for how long it was idle: `"taken_over":{"from":"builder@laptop","idle":"3h"}`. Its progress is in the same answer.
 
 ```json
 { "takeover": "45m" }
 ```
 
-`90m`, `2h`, `1d` and so on work, and `"off"` means a task is never taken over this way.
+`90m`, `2h`, `1d` and so on work; `"off"`, or no line at all, means a task is never taken over this way. Pick a time longer than any of your agents goes quiet while working, such as a long build.
 
 `wait` returns within a moment of the change it is waiting for: the hive holds the question open and answers when something happens (a queen older than 0.5 is asked every 5 seconds instead). It waits for up to 9 minutes, then exits with an error, which keeps it under the 10-minute limit agents such as Claude Code put on one command. A script or service with no such limit can end the command with its own: `90s`, `30m`, `2h`, or `forever` to never give up. Waiting for a status checks how things stand first, so a loop that waits again after a timeout misses nothing; the limit word is always the last one, so a note that is itself named `forever` is waited for as `hivenote wait forever forever`. If the note doesn't exist yet, it says so and holds on until someone adds it. With no name, it returns as soon as anything in the hive changes and lists each change: the note, what happened, and who did it. It follows the note it found first, so a different task created later under the same name never counts. If the queen restarts or the network drops while waiting, it keeps checking until its time is up. It only reads, so `hivenote wait build-api done && your-command` is how a script carries on afterwards. When its time is up, the error says where the task stands: `'build-api' did not reach done within 45 seconds. It is doing, last changed 3m ago by codex@laptop`.
 
@@ -95,7 +95,6 @@ On the queen:
 ```sh
 hivenote token add laptop                       # read/write; prints the token once
 hivenote token add dashboard read-only          # for a browser that only watches
-hivenote token add msi standby                  # read/write, and may keep a standby copy (below)
 hivenote token list
 hivenote token remove laptop                    # that machine is shut out at its next request
 hivenote serve 0.0.0.0                          # or serve 0.0.0.0:8080, or serve :7391
@@ -116,20 +115,28 @@ hivenote disconnect                             # back to this machine's own hiv
 
 `connect` checks the URL and token before saving them, keeps the token in a private file (mode 600) in HiveNote's settings folder, and from then on every note and task command on that machine, including agents', uses the queen. `ui`, `serve`, `token` and `backup` only run on the machine that holds the hive; from a worker, open the queen's dashboard at her address instead. A machine that is already connected is offered the token it has: `hivenote connect NEW-ADDRESS` asks `Use the token saved for OLD-ADDRESS? [Y/n]`, and Enter means yes. A hive keeps its tokens when its address changes, so nothing has to be pasted again; if the queen at the new address turns the token down, `connect` asks for one as usual. The question is only asked in a terminal, since it sends the saved token to the address you gave; a piped token is used as given. If the queen can't be reached, commands never quietly fall back to a local hive. `status` says which of these is wrong: the queen is down, the address isn't a queen, or the token was rejected.
 
-**While the queen is away.** Only new notes and tasks wait for her. `add` and `task` made while she can't be reached are kept in `queue.jsonl` in the settings folder, and answer `{"ok":"queued","note","kept"}`, `kept` being how many are kept, so the agent knows not to add them again. Everything else is refused and changes nothing: an `edit`, `append`, `mark`, `delete` or any other write changes a note she holds, and replaying it later could undo what others did meanwhile. Reading needs her too. While notes are kept, every command says so once: a line on stderr at a terminal, and `"kept"` in JSON, on errors too. `status` shows the count.
+**While the queen is away.** A worker keeps working. Reads (`list`, `read`, `search`, `tasks`) answer from what this machine last saw of her hive, with `"offline": {"as_of", "heads_up"}` saying how old that is; others may have changed it since. A machine that has never reached her has nothing to answer from, and says so. `wait` waits for her.
 
-`hivenote merge` sends the kept notes to the queen this machine is connected to, oldest first, each under the agent's label and with the operation ID it was made with, so one she already has is never made twice and `merge` can run again after a crash part way through. It answers with how many were `applied`, how many she had `already`, and `conflicts`: each kept note she did not take, as `{note, kind, by, why}`, usually because someone used the name meanwhile. Nothing of hers is ever changed by a merge.
+Writes that can't undo anyone's work are kept, and answer `{"ok":"queued","note","kept"}`, so the agent knows not to make them again:
+
+- new notes and tasks (`add`, `task`);
+- progress lines (`append`) on any note this machine has seen: they only add;
+- anything done to a note added here while she was away (`edit`, `replace`, `describe`, `mark`, `delete`, `append`), since nobody else has it yet.
+
+Every other change to one of her notes (an `edit`, `mark`, `delete` and so on) is refused and changes nothing, so nothing is ever replayed over what others did meanwhile. Taking a task needs her answer. While writes are kept, every command says so once: a line on stderr at a terminal, and `"kept"` in JSON, on errors too. Notes added here show up in `list` and `read` beside hers until they are merged.
+
+`hivenote merge` sends what was kept to the queen this machine is connected to, oldest first, each by the note's ID, under the agent's label and with the operation ID it was made with: one she already has is never made twice, a progress line never lands on another note, and `merge` can run again after a crash part way through. It answers with how many were `applied`, how many she had `already`, and `conflicts`, each as `{note, kind, by, why}`: a note added here whose name someone used meanwhile, or progress for a note she deleted meanwhile. Nothing of hers is ever changed by a merge. Agents are told to run it only when the user says so.
 
 A conflict waits on the worker until it is settled, and every answer carries `"conflicts"`, their count, until then:
 
 ```sh
-hivenote conflicts                              # each one: the kept text, and what the queen has under that name
+hivenote conflicts                              # each one: what was kept, and what the queen has under that name
 hivenote resolve outage as outage-writeup       # add it under another name (or the same name, to try again)
-hivenote resolve outage append                  # add its text as a progress line on the note she has
+hivenote resolve outage append                  # add it as progress on the note she has
 hivenote resolve outage drop                    # forget it
 ```
 
-The MCP server does not keep notes; its writes fail while the queen is away.
+The MCP server doesn't do any of this; its calls fail while the queen is away.
 
 **`serve public`** gives the queen an address on the internet without an account, a domain or an open port. It serves the hive on 127.0.0.1 and runs Cloudflare's `cloudflared` program, which connects out to Cloudflare and gets a random `https://….trycloudflare.com` address (a [quick tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/)). The command prints that address; workers use it with `hivenote connect`, and the dashboard is at the same address. Every request still needs a token.
 
@@ -170,25 +177,7 @@ To turn the helper off on a machine, add a line to `config.json` in HiveNote's s
 
 The old queen can join as a worker too: `hivenote token add LABEL` on the new queen, then `hivenote connect NEW-ADDRESS` on the old one.
 
-**When the queen is down.** A worker can keep a standby copy of the hive and serve it as a temporary queen while the queen is down. When she is back, one command gives her what was written on it.
-
-```sh
-hivenote token add msi standby                  # on the queen
-hivenote standby                                # on msi, connected with that token: keeps the copy current until stopped
-hivenote serve standby 0.0.0.0                  # on msi, while the queen is down (or serve standby public, as serve does)
-hivenote connect http://MSI-ADDRESS:7391        # on each other worker; press Enter to keep its token
-hivenote merge http://QUEEN-ADDRESS:7391        # on msi, when the main queen is back
-```
-
-- **The standby token.** It reads and writes like any read/write token, and may also copy the hive, including the hashes of its tokens. No other token can read those. `token list` shows it as `standby`. Give it only to a machine you trust as much as the queen: while it serves as a temporary queen, every worker sends it their token. Tokens removed on the main queen while she is down still work on the copy.
-- **`hivenote standby`** keeps `standby.db` in the settings folder current: it follows the queen's changes as they happen, keeps her note IDs, versions and history, and copies her tokens every minute, so the tokens workers hold work against the copy too. It runs until stopped, like `serve`, and prints one line once the copy is current. While the queen can't be reached it keeps trying, and after a restart it carries on from the last change it has.
-- **`hivenote serve standby`** serves the copy, with the same choices of address as `serve`, and records the queen's last change it had. The copy stops following her. Workers move with `hivenote connect` and keep their tokens; a token made on the queen in the last minute before she went down may not be in the copy. It refuses while the main queen still answers, since two queens split the hive; `serve standby --anyway` serves all the same, for a queen that answers but is broken. That check can't see a split network, where msi can't reach her but others can. On that machine `hivenote status` says `"hive":"temporary queen"` and how many `changes` made there the main queen doesn't have yet. Agents on msi itself still use the main queen's address: their new notes are kept as on any worker, and need `hivenote merge` there once she is back. A worker's kept notes go to whichever queen it is connected to when it runs `hivenote merge`.
-- **`hivenote merge MAIN-ADDRESS`** sends every write made on the temporary queen to the main queen, oldest first, through her usual API, each with the operation ID it was made with, using the token this machine is connected with. It answers with how many were `applied`, how many she had `already`, and `not_merged`: each change it did not send, as `{change, by, why}`. A change is not sent when she refuses it (an `edit` whose old text she no longer has, an `add` under a name she now uses), when it would replace what she changed meanwhile (a `replace`, `describe`, `delete`, `restore`, `mark` or `take` of a note she changed; progress lines on her side don't count), or when an earlier change to the same note was not sent. Nothing she has is overwritten. A write she has already is never made twice, so `merge` can run again, after a crash part way through or after more writes. Each change arrives at the time of the merge under the name of whoever made it on the temporary queen, such as `builder@laptop`, marked unverified: the main queen only knows it came through this machine's standby token. Only a standby token can pass writes on this way. The address must be the main queen's: `merge` refuses a temporary queen's address, its own included.
-- **After the merge**, stop `serve standby`, and run `hivenote connect MAIN-ADDRESS` on every worker. What was not merged is still in the copy: `HIVENOTE_DB=PATH hivenote read NAME`, with the path `merge` gives. Running `hivenote standby` again keeps the merged copy beside it as `standby-DATE.db` and starts a new one. It refuses while the copy holds writes that are not merged.
-
-Don't serve a standby copy while the main queen is up: two queens drift apart, and `merge` would leave you to settle each change both made.
-
-**Versions.** The queen and its workers should run the same version. Every answer carries the queen's version, and a worker prints a warning when the two differ in their first two numbers, once a day and not on every command. Update the queen first. A 1.0 worker with an older queen gets the error `queen_too_old`, and nothing changes, for `ready`, `take`, `after`, `task --after`, `list FOLDER/`, `standby` and `merge`; everything else works as before.
+**Versions.** The queen and its workers should run the same version. Every answer carries the queen's version, and a worker prints a warning when the two differ in their first two numbers, once a day and not on every command. Update the queen first. A 1.0 worker with an older queen gets the error `queen_too_old`, and nothing changes, for `ready`, `take`, `after`, `task --after` and `list FOLDER/`; everything else works as before.
 
 ## Dashboard
 
@@ -231,7 +220,7 @@ hivenote backup ~/hivenote-2026-10-03.db
 
 `backup` makes a consistent copy while the hive is in use, checks it, and refuses to overwrite an existing file. Backups contain the full history and the token hashes, so keep them private. To restore, stop the queen, put the backup in place of `data.db` (or point `HIVENOTE_DB` at it), and start it again.
 
-A newer HiveNote opens a database made by an older one. An older HiveNote refuses to open a database made by a newer one and leaves the file untouched. HiveNote 1.0 adds a column to the token table of a file made before it, the first time it opens it, and copies the file first to `data.db.before-v2` beside it. If a file is already at that name, the copy goes beside it with the time in its name instead, so no copy is ever replaced. HiveNote 0.5 can't open the file after that; to go back to it, put that copy in place. Anything written after the upgrade is not in the copy, so make a `hivenote backup FILE` first if you need it, and don't open the copy with 1.0, which would upgrade it.
+A newer HiveNote opens a database made by an older one. An older HiveNote refuses to open a database made by a newer one and leaves the file untouched. HiveNote 1.0 uses the same file as 0.5, unchanged, so you can go back to 0.5 at any time.
 
 ## MCP
 
@@ -251,7 +240,7 @@ args = ["mcp"]
 
 ## HTTP
 
-The queen answers `POST /v1/call` with a JSON body `{"method", "params"}` and an `Authorization: Bearer TOKEN` header, and `GET /health` with `{"ok", "version", "queen"}`. Methods: `list`, `read`, `search`, `create`, `edit`, `replace`, `append`, `delete`, `history`, `revision`, `restore`, `changes`, `update_task`, `take`. Notes are named with `note` (their name); each write takes an `op_id`, and resending the same `op_id` returns the first answer instead of applying the change twice. The hive keeps the answers to its latest 2,000 writes for this; an `op_id` sent again after that is refused with `op_id_conflict`, and the change is still not applied twice. Requests are limited to 1 MB. `POST /v1/standby` with a standby token answers with every token's record, hashes included, for a standby copy; any other token is refused with `forbidden`.
+The queen answers `POST /v1/call` with a JSON body `{"method", "params"}` and an `Authorization: Bearer TOKEN` header, and `GET /health` with `{"ok", "version", "queen"}`. Methods: `list`, `read`, `search`, `create`, `edit`, `replace`, `append`, `delete`, `history`, `revision`, `restore`, `changes`, `update_task`, `take`. Notes are named with `note` (their name); each write takes an `op_id`, and resending the same `op_id` returns the first answer instead of applying the change twice. The hive keeps the answers to its latest 2,000 writes for this; an `op_id` sent again after that is refused with `op_id_conflict`, and the change is still not applied twice. Requests are limited to 1 MB.
 
 What 1.0 added to the methods:
 

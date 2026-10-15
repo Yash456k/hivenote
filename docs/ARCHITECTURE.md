@@ -25,19 +25,16 @@ dashboard ────┘ (ui/, reads through HTTP)
 | `tunnel.ts` | `serve public`: finding or downloading `cloudflared`, running it, and starting it again if it stops |
 | `helper.ts` | The connection helper on a worker: a background process that keeps one connection to the queen open, and the commands' side of talking to it |
 | `connect.ts`, `config.ts` | Saving which queen to use, and the token file |
-| `queue.ts` | On a worker: keeping new notes made while the queen can't be reached until `hivenote merge` sends them, and the conflicts merge leaves for `resolve` |
-| `standby.ts` | On a worker: keeping a standby copy of the queen's hive, serving it as a temporary queen, and merging what was written on it |
+| `queue.ts`, `seen.ts` | On a worker: what it last saw of the queen's hive, reads from it while she can't be reached, writes kept until `hivenote merge` sends them, and the conflicts merge leaves for `resolve` |
 | `wait.ts` | Waiting for a note to change or a task to reach a status |
 | `mcp.ts` | The MCP tools |
 | `runtime.ts` | The Node version check and agent detection |
 
 ## Storage
 
-One SQLite file, opened with Node's built-in `node:sqlite` (Node 22.16 is the first with full-text search). Tables: `notes` (the current version of each note), `events` (every change, with a full copy of the note for each version), `receipts` (the answer to every write, by `op_id`, so a resent write isn't applied twice), `clients` (token hashes, and `standby` for a standby token) and `notes_fts` (the search index, updated in the same transaction as the note).
+One SQLite file, opened with Node's built-in `node:sqlite` (Node 22.16 is the first with full-text search). Tables: `notes` (the current version of each note), `events` (every change, with a full copy of the note for each version), `receipts` (the answer to every write, by `op_id`, so a resent write isn't applied twice), `clients` (token hashes) and `notes_fts` (the search index, updated in the same transaction as the note).
 
 The tasks a task waits on are kept as a list of note IDs in its `metadata` (`metadata.after`), which needed no schema change; `ready` and `take` read them with SQLite's JSON functions. Folders are only names with a `/` in them.
-
-A standby copy is a hive file of the same shape. `standby` follows the queen's `changes` feed and writes each event into it under her own `seq`, with the note from the event's snapshot (a progress line only moves the note's activity), so ids, versions and history are hers; it refuses to write when the copy's latest change is not the one it last wrote. Its tokens come from `POST /v1/standby`, which answers only a standby token. Which queen it copies, and once it serves, her last change it had, are in `standby.json` beside it. A temporary queen keeps the receipt of every write instead of the latest 2,000: each receipt holds the request as it was made, and `merge` sends those to the main queen in order, by note ID, with their own `op_id`s. Before each, it reads her history of that note after the changes the copy had: a write whose `op_id` is there is already made, and one that would replace a version the copy never saw is reported instead.
 
 Writes take the write lock up front, check and change everything inside one transaction, and never wait on the network or other files while holding it. `PRAGMA user_version` records the schema version; see AGENTS.md for how a change to it must keep users' data.
 
@@ -46,6 +43,6 @@ Writes take the write lock up front, check and change everything inside one tran
 - Notes are named by their name everywhere a person or agent types. IDs exist so renames and reused names keep separate histories.
 - There is no version checking or locking. The latest write wins, history keeps everything, and `restore` is the undo.
 - A task's status, who changed it last and when, and the tasks it waits on are the whole coordination model. `take` and the check in `mark doing` are made inside the write, on the queen, so two agents can't both be given one task.
-- Workers never load SQLite, except to keep or serve a standby copy, and normal commands never load the MCP SDK.
+- Workers never load SQLite, and normal commands never load the MCP SDK. A worker's copy of what it saw is a JSON file (`seen.json`), capped at 20 MB.
 - The connection helper is the only thing that runs between commands, and only on a worker. Nothing depends on it: every command works the same without it, just slower.
-- Only new notes wait for the queen; every other write is refused while she is away, so nothing is replayed over what others did meanwhile. Kept notes are a file, not a process: only `hivenote merge` sends them, and their `op_id`s make sending one again safe.
+- While the queen is away only writes that can't undo anyone's work are kept: new notes, progress lines, and changes to notes made here. Changes to her notes are refused, so nothing is replayed over what others did meanwhile. Kept writes are a file, not a process: only `hivenote merge` sends them, each by note ID, and their `op_id`s make sending one again safe.
