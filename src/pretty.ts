@@ -136,23 +136,34 @@ export function pretty(command: string, value: unknown): string {
       if (command === 'take') return `Took ${bold(note!.name)}${took}\n${dim(note!.description)}${note!.content ? `\n\n${note!.content}` : ''}`;
       return `Marked ${bold(note!.name)} ${note!.status ?? 'todo'}${took}${warning ? `\n${dim(warning)}` : ''}`;
     }
-    case 'status': return v.hive === 'queen'
+    case 'status': if (v.hive === 'temporary queen') return `This machine is a temporary queen for ${String(v.queen)}\n${dim(`${String(v.changes)} change${v.changes === 1 ? '' : 's'} made here ${v.changes === 1 ? 'is' : 'are'} not on her yet · when she is back: hivenote merge ${String(v.queen)}`)}`;
+      return v.hive === 'queen'
       ? `Connected to the queen at ${String(v.url)}\n${dim(`${notes(v.notes)} · queen ${String(v.queen_version)} · this machine ${String(v.this_version)} · ${String(v.round_trip_ms)} ms · connection ${String(v.connection)}${v.queued ? ` · ${String(v.queued)} kept writes waiting` : ''}`)}`
       : `Using this machine's own hive at ${String(v.db)}\n${dim(`${notes(v.notes)} · version ${String(v.version)}`)}`;
     case 'connect': return `Connected to the queen at ${String(v.connected)} (${notes(v.entries)}). Every hivenote command here now uses that hive.`;
     case 'disconnect': return 'Disconnected. This machine uses its own hive again. To shut the old token out too, run hivenote token remove LABEL on the queen.';
     case 'serve': {
-      if (v.public) {
-        const again = `hivenote connect ${String(v.public)}`;
-        if (v.was) return `The tunnel had to start again, so the hive has a new address: ${bold(String(v.public))}\n${dim(`On every worker run: ${again}`)}`;
-        return `This machine is now the queen, and its hive is on the internet at ${bold(String(v.public))}\n${dim(`Dashboard: ${String(v.dashboard)}`)}\n${dim(`Let a machine in: hivenote token add LABEL here, in another terminal, then ${again} on that machine.`)}\n${dim('A new address can take up to a minute to work everywhere. It lasts until this command stops; starting it again gives a new one, and workers connect again.')}`;
-      }
+      if (v.was) return `The tunnel had to start again, so the hive has a new address: ${bold(String(v.public))}\n${dim(`On every worker run: hivenote connect ${String(v.public)}`)}`;
       // 0.0.0.0 means "every address of this machine"; it is not an address another machine can use.
       const everywhere = /\/\/(0\.0\.0\.0|\[::\])/u.test(String(v.serving));
       const port = String(v.serving).split(':').pop()!;
-      const where = everywhere ? `on port ${port}, at every address this machine has` : `at ${String(v.serving)}`;
-      const url = everywhere ? `http://THIS-MACHINE'S-ADDRESS:${port}` : 'URL';
-      return `This machine is now the queen, sharing its hive ${where}\n${dim(`Dashboard: ${String(v.dashboard)}`)}\n${dim(`Let a machine in: hivenote token add LABEL here, then hivenote connect ${url} on that machine.`)}`;
+      const where = v.public ? `on the internet at ${bold(String(v.public))}` : everywhere ? `on port ${port}, at every address this machine has` : `at ${String(v.serving)}`;
+      const url = v.public ? String(v.public) : everywhere ? `http://THIS-MACHINE'S-ADDRESS:${port}` : 'URL';
+      const lead = v.standby_for
+        ? `This machine is now a temporary queen for ${String(v.standby_for)}, sharing its standby copy ${where}`
+        : `This machine is now the queen, ${v.public ? 'and its hive is' : 'sharing its hive'} ${where}`;
+      const next = v.standby_for
+        ? `Workers keep their token: hivenote connect ${url} on each, then Enter. When the main queen is back: hivenote merge ${String(v.standby_for)}`
+        : `Let a machine in: hivenote token add LABEL here${v.public ? ', in another terminal,' : ','} then hivenote connect ${url} on that machine.`;
+      const tunnel = v.public ? `\n${dim('A new address can take up to a minute to work everywhere. It lasts until this command stops; starting it again gives a new one, and workers connect again.')}` : '';
+      return `${lead}\n${dim(`Dashboard: ${String(v.dashboard)}`)}\n${dim(next)}${tunnel}`;
+    }
+    case 'standby': return `This machine keeps a standby copy of the hive at ${String(v.standby)}, current to change ${String(v.seq)}.\n${dim('It keeps following her until stopped. If she goes down: hivenote serve standby')}`;
+    case 'merge': {
+      const notMerged = v.not_merged as { change: string; by: string; why: string }[];
+      const lines = [`Merged into the main queen at ${String(v.merged_into)}: ${String(v.applied)} change${v.applied === 1 ? '' : 's'} applied${v.already ? dim(` (${String(v.already)} she had already)`) : ''}`];
+      if (notMerged.length) lines.push('', bold(`Not merged (${notMerged.length}):`), ...notMerged.map(item => `  ${item.change} ${dim(`by ${item.by}`)}: ${item.why}`));
+      return [...lines, '', dim(String(v.next))].join('\n');
     }
     case 'ui': return `Dashboard: ${String(v.dashboard)}`;
     case 'backup': return `Backed up to ${String(v.path)}`;

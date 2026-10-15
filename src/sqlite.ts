@@ -89,12 +89,15 @@ export class SqliteStore implements Store {
   readonly path: string;
   /** 0 means a doing task is never taken over. */
   private readonly takeoverMs: number;
+  /** A temporary queen keeps the answer to every write: they are what `merge` sends to the main queen. */
+  private readonly keepReceipts: boolean;
 
-  constructor(path: string, private actor: Actor = localActor(), options: { takeoverMs?: number } = {}) {
+  constructor(path: string, private actor: Actor = localActor(), options: { takeoverMs?: number; keepReceipts?: boolean } = {}) {
     // Callers with direct file access may label themselves, but are never token-verified.
     this.actor = { ...actor, verified: false };
     this.path = resolve(path);
     this.takeoverMs = options.takeoverMs ?? TAKEOVER_MS;
+    this.keepReceipts = options.keepReceipts ?? false;
     this.db = openDatabase(this.path);
   }
 
@@ -139,7 +142,7 @@ export class SqliteStore implements Store {
       const result = this.mutate(method, params, attribution(current));
       const kept = this.run('INSERT INTO receipts(op_id,principal,request,response) VALUES(?,?,?,?)', opId, current.principal, request, JSON.stringify(result));
       // Older answers go a hundred at a time, so the first write to a hive that kept them all is not a long one.
-      this.run('DELETE FROM receipts WHERE rowid IN (SELECT rowid FROM receipts WHERE rowid<=? ORDER BY rowid LIMIT 100)', Number(kept.lastInsertRowid) - RECEIPTS_KEPT);
+      if (!this.keepReceipts) this.run('DELETE FROM receipts WHERE rowid IN (SELECT rowid FROM receipts WHERE rowid<=? ORDER BY rowid LIMIT 100)', Number(kept.lastInsertRowid) - RECEIPTS_KEPT);
       return result;
     });
   }
@@ -617,10 +620,73 @@ export class SqliteStore implements Store {
   }
 
   // ---------- A standby copy ----------
+  // A worker keeps a copy of the queen's hive by following her feed of changes, and can serve it while she is down.
 
   /** Every token, hashes included, for a standby copy. The server gives them only to a standby token. */
   standbyTokens(): Row[] {
     return this.all('SELECT id,principal,device,token_hash,scope,standby,revoked,created_at,revoked_at FROM clients ORDER BY created_at,id');
+  }
+
+  /** Make this copy's tokens the queen's, so the tokens workers hold work here too. */
+  copyTokens(rows: Row[]): void {
+    const columns = ['id', 'principal', 'device', 'token_hash', 'scope', 'standby', 'revoked', 'created_at', 'revoked_at'];
+    transaction(this.db, () => {
+      this.run('DELETE FROM clients');
+      for (const row of rows) this.run(`INSERT INTO clients(${columns.join(',')}) VALUES(${columns.map(() => '?').join(',')})`, ...columns.map(column => (row[column] ?? null) as SQLInputValue));
+    });
+  }
+
+  /**
+   * Add the queen's changes after `cursor`, with her numbers, ids and versions, and bring the notes up to date.
+   * Refused when anything else wrote to this copy since, such as workers while it served as a temporary queen.
+   */
+  follow(events: Event[], cursor: number): number {
+    return transaction(this.db, () => {
+      if (this.seq() !== cursor) throw new HiveNoteError('conflict', 'This copy has changed since it last followed the queen', 409);
+      const touched = new Set<string>();
+      for (const event of events) {
+        if (event.snapshot) this.save(event.snapshot, !this.get('SELECT 1 FROM notes WHERE id=?', event.note_id));
+        else this.run('UPDATE notes SET activity_at=?,last_activity_attribution=? WHERE id=?', event.timestamp, JSON.stringify(event.attribution), event.note_id);
+        this.run(
+          'INSERT INTO events(seq,note_id,kind,revision,snapshot,body,op_id,attribution,timestamp) VALUES(?,?,?,?,?,?,?,?,?)',
+          event.seq, event.note_id, event.kind, event.revision, event.snapshot === null ? null : JSON.stringify(event.snapshot), event.body, event.op_id, JSON.stringify(event.attribution), event.timestamp,
+        );
+        touched.add(event.note_id);
+      }
+      for (const id of touched) this.index(toNote(this.get('SELECT * FROM notes WHERE id=?', id)!));
+      return events.at(-1)?.seq ?? cursor;
+    });
+  }
+
+  /** The number of the latest change in this hive, and how many came after `seq`. */
+  changeCount(seq = 0): { latest: number; after: number } {
+    return { latest: this.seq(), after: Number(this.get('SELECT count(*) AS n FROM events WHERE seq>?', seq)?.n) };
+  }
+
+  /** The op_id of change number `seq`, to tell whether a copy is of the same hive. */
+  opIdAt(seq: number): string | undefined {
+    return this.get('SELECT op_id FROM events WHERE seq=?', seq)?.op_id as string | undefined;
+  }
+
+  /** Whether this hive has a change with this op_id. */
+  knows(opId: string): boolean {
+    return this.get('SELECT 1 FROM events WHERE op_id=?', opId) !== undefined;
+  }
+
+  /** How many changes a note had up to change number `seq`. */
+  changesOf(noteId: string, seq: number): number {
+    return Number(this.get('SELECT count(*) AS n FROM events WHERE note_id=? AND seq<=?', noteId, seq)?.n);
+  }
+
+  /**
+   * The writes made here, oldest first: each as it was asked for, the note as it left it, and who made it.
+   * A standby copy gets its notes from the queen's feed, which has no answers, so these are the temporary queen's own.
+   */
+  writesMadeHere(): { method: Method; params: Params; note: Note; attribution: Attribution }[] {
+    return this.all('SELECT r.request, r.response, e.attribution FROM receipts r JOIN events e ON e.op_id=r.op_id ORDER BY r.rowid').map(row => {
+      const { method, params } = JSON.parse(row.request as string) as { method: Method; params: Params };
+      return { method, params, note: (JSON.parse(row.response as string) as Receipt).note, attribution: JSON.parse(row.attribution as string) as Attribution };
+    });
   }
 
   /** A consistent, integrity-checked copy of the database at a new path. */

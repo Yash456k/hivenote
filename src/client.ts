@@ -107,9 +107,7 @@ export class HttpStore implements Store {
       const object = payload as Record<string, unknown>;
       if (!response.ok) {
         const error = object.error as Record<string, unknown> | undefined;
-        if (tooOld(method, params, error)) {
-          throw new HiveNoteError('queen_too_old', `The queen runs HiveNote ${this.serverVersion ?? 'older than 1.0'}, and this needs 1.0 or newer there. Nothing was changed. Update the queen with npm install -g hivenote@latest, then restart hivenote serve`, 501);
-        }
+        if (tooOld(method, params, error)) throw queenTooOld(this.serverVersion);
         throw new HiveNoteError(typeof error?.code === 'string' ? error.code : 'http_error', typeof error?.message === 'string' ? error.message : `Server returned HTTP ${response.status}`, response.status, error?.details);
       }
       if (!Object.hasOwn(object, 'result')) throw new HiveNoteError('invalid_response', 'Server response is missing result', 502);
@@ -117,6 +115,9 @@ export class HttpStore implements Store {
     }
   }
   close(): void {}
+}
+export function queenTooOld(version: string | null | undefined): HiveNoteError {
+  return new HiveNoteError('queen_too_old', `The queen runs HiveNote ${version ?? 'older than 1.0'}, and this needs 1.0 or newer there. Nothing was changed. Update the queen with npm install -g hivenote@latest, then restart hivenote serve`, 501);
 }
 /** Parameters added in 1.0. A queen before it refuses them as unknown, and a new method as no method at all. */
 const NEWER_PARAMS = ['after', 'not_after', 'ready', 'folder'];

@@ -54,6 +54,11 @@ Machines
   hivenote token add LABEL [read-only]    let another machine in (token list, token remove LABEL)
   hivenote backup FILE | hivenote mcp
 
+When the queen is down
+  hivenote standby                        keep a copy of the queen's hive on this worker (token add LABEL standby)
+  hivenote serve standby [HOST][:PORT]    serve that copy as a temporary queen while she is down
+  hivenote merge URL                      when she is back, send her what was written on the temporary queen
+
 Any text can be - to read it from a file or typed input: hivenote replace notes - < notes.md
 Several commands fit on one line, and && stops at the first that fails: hivenote list && hivenote read NAME
 Shell habits work too: ls (list), cat (read), grep and find (search), rm (delete), log (history)
@@ -219,7 +224,7 @@ function currentConfig(agent: string | undefined): Config {
   return config;
 }
 
-async function openLocalStore(config: Config): Promise<LocalStore> {
+async function openLocalStore(config: Config, options: { keepReceipts?: boolean } = {}): Promise<LocalStore> {
   if (config.url) throw new HiveNoteError('local_only', 'This machine is connected to a queen; run this on the queen, or hivenote disconnect first');
   if (!config.db) mkdirSync(configDirectory(), { recursive: true, mode: 0o700 });
   const actor: Actor = { principal: 'local', device: 'local', scope: 'rw', verified: false };
@@ -228,9 +233,9 @@ async function openLocalStore(config: Config): Promise<LocalStore> {
   quietSqliteWarning();
   // Loaded only for a hive on this machine, so workers never need SQLite.
   const modulePath = './sqlite.js';
-  const { SqliteStore } = await import(modulePath) as { SqliteStore: new (path: string, actor?: Actor, options?: { takeoverMs?: number }) => LocalStore };
+  const { SqliteStore } = await import(modulePath) as { SqliteStore: new (path: string, actor?: Actor, options?: { takeoverMs?: number; keepReceipts?: boolean }) => LocalStore };
   const takeover = takeoverMs(config);
-  return new SqliteStore(config.db ?? defaultDbPath(), actor, takeover === undefined ? {} : { takeoverMs: takeover });
+  return new SqliteStore(config.db ?? defaultDbPath(), actor, { ...options, ...(takeover === undefined ? {} : { takeoverMs: takeover }) });
 }
 
 /**
@@ -555,7 +560,8 @@ async function agreeToPublic(store: LocalStore, yes: boolean): Promise<void> {
   process.stderr.write('hivenote: noted; this machine will not ask again.\n');
 }
 
-async function runServer(store: LocalStore, command: 'serve' | 'ui', words: string[]): Promise<void> {
+/** `standby` is the queen a temporary queen stands in for. */
+async function runServer(store: LocalStore, command: 'serve' | 'ui', words: string[], standby?: string): Promise<void> {
   // serve public: the tunnel reaches the hive on this machine, so only the port can be chosen.
   const tunnelled = command === 'serve' && words[0] === 'public';
   // The word yes agrees to a public hive without being asked; it is how an agent or a script says so.
@@ -591,7 +597,7 @@ async function runServer(store: LocalStore, command: 'serve' | 'ui', words: stri
     const opening = openTunnel(port, {
       say: message => { process.stderr.write(`hivenote: ${message}\n`); },
       // The first address, then a line for every new one if the tunnel had to start again.
-      address: (url, previous) => output(previous === undefined ? { serving, public: url, dashboard: `${url}/` } : { public: url, was: previous }),
+      address: (url, previous) => output(previous === undefined ? { serving, public: url, dashboard: `${url}/`, ...(standby ? { standby_for: standby } : {}) } : { public: url, was: previous }),
     });
     tunnel = opening;
     try { await opening.opened; } catch (error) {
@@ -600,7 +606,7 @@ async function runServer(store: LocalStore, command: 'serve' | 'ui', words: stri
       running.close(); running.closeAllConnections(); throw error;
     }
   } else if (command === 'serve') {
-    output({ serving: `http://${host}:${port}`, dashboard: `http://${local}:${port}/` });
+    output({ serving: `http://${host}:${port}`, dashboard: `http://${local}:${port}/`, ...(standby ? { standby_for: standby } : {}) });
   } else {
     const url = `http://127.0.0.1:${port}/#k=${viewerKey}`;
     output({ dashboard: url });
@@ -623,6 +629,9 @@ async function runToken(store: LocalStore, words: string[]): Promise<void> {
 
 /** status: which hive this machine uses and whether it answers. Problems exit nonzero with a plain reason. */
 async function runStatus(config: Config): Promise<void> {
+  // A machine that served as a temporary queen says so until what was written on it is merged.
+  const temporary = existsSync(join(configDirectory(), 'standby.json')) ? await (await import('./standby.js')).temporaryQueen() : undefined;
+  if (temporary) { output({ ...temporary, version: VERSION }); return; }
   if (!config.url) {
     const store = await openLocalStore(config);
     try {
@@ -709,12 +718,34 @@ async function runOnThisMachine(command: string, words: string[], config: Config
   }
 }
 
+/** standby, serve standby and merge: a copy of the queen's hive on a worker, served while she is down. */
+async function runStandby(command: string, words: string[], config: Config): Promise<void> {
+  const standby = await import('./standby.js');
+  if (command === 'standby') {
+    if (words.length) fail('Usage: hivenote standby');
+    if (!config.url) throw new HiveNoteError('invalid_args', 'hivenote standby keeps a copy of a queen\'s hive on a worker. On the queen run hivenote token add LABEL standby, then hivenote connect URL here with that token');
+    await standby.keepStandby(config.url, readToken(config), line => { process.stderr.write(`hivenote: ${line}\n`); }, output);
+    return;
+  }
+  if (command === 'merge') {
+    if (words.length !== 1) fail('Usage: hivenote merge URL (the main queen\'s address)');
+    output(await standby.merge(words[0]!, readToken(config)));
+    return;
+  }
+  const { queen } = await standby.takeOver();
+  quietSqliteWarning();
+  (await import('./database.js')).lockWait.ms = 200;
+  const { url: _url, tokenFile: _tokenFile, ...rest } = config;
+  const store = await openLocalStore({ ...rest, db: standby.standbyPath() }, { keepReceipts: true });
+  try { await runServer(store, 'serve', words.slice(1), queen); } catch (error) { store.close(); throw error; }
+}
+
 // ---------- Unknown words ----------
 
 /** Words people type out of shell habit, and the command each one means. */
 const ALIASES: Record<string, string> = { ls: 'list', cat: 'read', grep: 'search', find: 'search', rm: 'delete', log: 'history' };
 
-const MACHINE = ['serve', 'ui', 'connect', 'disconnect', 'status', 'token', 'backup', 'mcp', 'version', 'help'];
+const MACHINE = ['serve', 'ui', 'connect', 'disconnect', 'status', 'token', 'backup', 'mcp', 'standby', 'merge', 'version', 'help'];
 /** Commands from before 0.3, so old habits and old skill files get pointed the right way. */
 const RENAMED: Record<string, string> = {
   create: 'add NAME "description" "text" (or task NAME "description" for a task)',
@@ -776,6 +807,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     if (config.url && plan.enabled) await helper.runHelper(config.url, readToken(config), plan.idleMs);
     return;
   }
+  if (command === 'standby' || command === 'merge' || (command === 'serve' && words[0] === 'standby')) { await runStandby(command, words, config); return; }
   if (command === 'serve' || command === 'ui' || command === 'token' || command === 'backup') { await runOnThisMachine(command, words, config); return; }
 
   // hasOwn: a word like "constructor" is not a command just because every object has one.
