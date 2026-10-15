@@ -95,6 +95,7 @@ On the queen:
 ```sh
 hivenote token add laptop                       # read/write; prints the token once
 hivenote token add dashboard read-only          # for a browser that only watches
+hivenote token add msi standby                  # read/write, and may keep a standby copy (below)
 hivenote token list
 hivenote token remove laptop                    # that machine is shut out at its next request
 hivenote serve 0.0.0.0                          # or serve 0.0.0.0:8080, or serve :7391
@@ -155,7 +156,25 @@ To turn the helper off on a machine, add a line to `config.json` in HiveNote's s
 
 The old queen can join as a worker too: `hivenote token add LABEL` on the new queen, then `hivenote connect NEW-ADDRESS` on the old one.
 
-**Versions.** The queen and its workers should run the same version. Every answer carries the queen's version, and a worker prints a warning when the two differ in their first two numbers, once a day and not on every command. Update the queen first. A 1.0 worker with an older queen gets the error `queen_too_old`, and nothing changes, for `ready`, `take`, `after`, `task --after` and `list FOLDER/`; everything else works as before.
+**When the queen is down.** A worker can keep a standby copy of the hive and serve it as a temporary queen while the queen is down. When she is back, one command gives her what was written on it.
+
+```sh
+hivenote token add msi standby                  # on the queen
+hivenote standby                                # on msi, connected with that token: keeps the copy current until stopped
+hivenote serve standby 0.0.0.0                  # on msi, while the queen is down (or serve standby public, as serve does)
+hivenote connect http://MSI-ADDRESS:7391        # on each other worker; press Enter to keep its token
+hivenote merge http://QUEEN-ADDRESS:7391        # on msi, when the main queen is back
+```
+
+- **The standby token.** It reads and writes like any read/write token, and may also copy the hive, including the hashes of its tokens. No other token can read those. `token list` shows it as `standby`.
+- **`hivenote standby`** keeps `standby.db` in the settings folder current: it follows the queen's changes as they happen, keeps her note IDs, versions and history, and copies her tokens every minute, so the tokens workers hold work against the copy too. It runs until stopped, like `serve`, and prints one line once the copy is current. While the queen can't be reached it keeps trying, and after a restart it carries on from the last change it has.
+- **`hivenote serve standby`** serves the copy, with the same choices of address as `serve`, and records the queen's last change it had. The copy stops following her. Workers move with `hivenote connect` and keep their tokens; a token made on the queen in the last minute before she went down may not be in the copy. On that machine `hivenote status` says `"hive":"temporary queen"` and how many `changes` made there the main queen doesn't have yet. A worker's kept writes go to whichever queen it is connected to when a command next reaches one.
+- **`hivenote merge MAIN-ADDRESS`** sends every write made on the temporary queen to the main queen, oldest first, through her usual API, each with the operation ID it was made with, using the token this machine is connected with. It answers with how many were `applied`, how many she had `already`, and `not_merged`: each change it did not send, as `{change, by, why}`. A change is not sent when she refuses it (an `edit` whose old text she no longer has, an `add` under a name she now uses), when it would replace what she changed meanwhile (a `replace`, `describe`, `delete`, `restore`, `mark` or `take` of a note she changed; progress lines on her side don't count), or when an earlier change to the same note was not sent. Nothing she has is overwritten. A write she has already is never made twice, so `merge` can run again, after a crash part way through or after more writes. Changes arrive as made through this machine's token, such as `builder@msi`, at the time of the merge.
+- **After the merge**, stop `serve standby`, and run `hivenote connect MAIN-ADDRESS` on every worker. What was not merged is still in the copy: `HIVENOTE_DB=PATH hivenote read NAME`, with the path `merge` gives. Running `hivenote standby` again keeps the merged copy beside it as `standby-DATE.db` and starts a new one. It refuses while the copy holds writes that are not merged.
+
+Don't serve a standby copy while the main queen is up: two queens drift apart, and `merge` would leave you to settle each change both made.
+
+**Versions.** The queen and its workers should run the same version. Every answer carries the queen's version, and a worker prints a warning when the two differ in their first two numbers, once a day and not on every command. Update the queen first. A 1.0 worker with an older queen gets the error `queen_too_old`, and nothing changes, for `ready`, `take`, `after`, `task --after`, `list FOLDER/`, `standby` and `merge`; everything else works as before.
 
 ## Dashboard
 
@@ -198,7 +217,7 @@ hivenote backup ~/hivenote-2026-10-03.db
 
 `backup` makes a consistent copy while the hive is in use, checks it, and refuses to overwrite an existing file. Backups contain the full history and the token hashes, so keep them private. To restore, stop the queen, put the backup in place of `data.db` (or point `HIVENOTE_DB` at it), and start it again.
 
-A newer HiveNote opens a database made by an older one. An older HiveNote refuses to open a database made by a newer one and leaves the file untouched.
+A newer HiveNote opens a database made by an older one. An older HiveNote refuses to open a database made by a newer one and leaves the file untouched. HiveNote 1.0 adds a column to the token table of a file made before it, the first time it opens it, and copies the file first to `data.db.before-v2` beside it. HiveNote 0.5 can't open the file after that; to go back to it, put that copy in place.
 
 ## MCP
 
@@ -218,7 +237,7 @@ args = ["mcp"]
 
 ## HTTP
 
-The queen answers `POST /v1/call` with a JSON body `{"method", "params"}` and an `Authorization: Bearer TOKEN` header, and `GET /health` with `{"ok", "version", "queen"}`. Methods: `list`, `read`, `search`, `create`, `edit`, `replace`, `append`, `delete`, `history`, `revision`, `restore`, `changes`, `update_task`, `take`. Notes are named with `note` (their name); each write takes an `op_id`, and resending the same `op_id` returns the first answer instead of applying the change twice. The hive keeps the answers to its latest 2,000 writes for this; an `op_id` sent again after that is refused with `op_id_conflict`, and the change is still not applied twice. Requests are limited to 1 MB.
+The queen answers `POST /v1/call` with a JSON body `{"method", "params"}` and an `Authorization: Bearer TOKEN` header, and `GET /health` with `{"ok", "version", "queen"}`. Methods: `list`, `read`, `search`, `create`, `edit`, `replace`, `append`, `delete`, `history`, `revision`, `restore`, `changes`, `update_task`, `take`. Notes are named with `note` (their name); each write takes an `op_id`, and resending the same `op_id` returns the first answer instead of applying the change twice. The hive keeps the answers to its latest 2,000 writes for this; an `op_id` sent again after that is refused with `op_id_conflict`, and the change is still not applied twice. Requests are limited to 1 MB. `POST /v1/standby` with a standby token answers with every token's record, hashes included, for a standby copy; any other token is refused with `forbidden`.
 
 What 1.0 added to the methods:
 

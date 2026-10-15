@@ -133,9 +133,33 @@ This starts a Cloudflare quick tunnel. There is no account to make and no port t
 
 Any other address works too: your LAN, Tailscale, or a tunnel you run. On a network you don't fully trust, and always across the internet, put it behind HTTPS (a Cloudflare tunnel works) or Tailscale, because plain HTTP sends the token unencrypted.
 
+#### When the queen is down
+
+A worker can keep a copy of the hive, ready to stand in for the queen. Give it a standby token, connect it with that token, and leave this running there:
+
+```sh
+hivenote token add msi standby          # on the queen
+hivenote standby                        # on msi: keeps a current copy until stopped
+```
+
+If the queen goes down, msi serves its copy as a temporary queen, and the other workers move to it with the tokens they have:
+
+```sh
+hivenote serve standby 0.0.0.0          # on msi
+hivenote connect http://MSI-ADDRESS:7391   # on each other worker; press Enter to keep its token
+```
+
+When the main queen is back, one command on msi sends her what was written in the meantime. Then every worker connects to her again.
+
+```sh
+hivenote merge http://QUEEN-ADDRESS:7391
+```
+
+Nothing is made twice, even if `merge` runs again, and nothing on the main queen is overwritten: where she changed the same thing meanwhile, such as a task taken on both, `merge` lists it for you to settle.
+
 ### Updating
 
-Run `npm install -g hivenote@latest` on every machine, the queen first. Your notes, tokens and connections stay as they are. A worker on 1.0 needs the queen on 1.0 for `ready`, `take`, `after` and folders, and says so when she is older. Restart `hivenote serve` on the queen so it runs the new version, and copy the skill again so agents learn any new commands.
+Run `npm install -g hivenote@latest` on every machine, the queen first. Your notes, tokens and connections stay as they are. A worker on 1.0 needs the queen on 1.0 for `ready`, `take`, `after`, folders and `standby`, and says so when she is older. Restart `hivenote serve` on the queen so it runs the new version, and copy the skill again so agents learn any new commands.
 
 ## License
 
