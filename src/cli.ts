@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import type { Server } from 'node:http';
 import { byline, HiveNoteError, VERSION, type Actor, type Event, type Method, type Params, type Store } from './contract.js';
 import { HttpStore } from './client.js';
-import { configDirectory, defaultDbPath, loadConfig, readToken, resolveConfig, type Config } from './config.js';
+import { configDirectory, defaultDbPath, loadConfig, readToken, resolveConfig, takeoverMs, type Config } from './config.js';
 import { assertSupportedNode, detectAgent, quietSqliteWarning } from './runtime.js';
 import { WAIT_DEFAULTS, changesSince, waitForAnyChange, waitForNote, type TaskStatus } from './wait.js';
 import { pretty } from './pretty.js';
@@ -17,7 +17,7 @@ import { lean, leanDetails, word } from './lean.js';
 const HELP = `hivenote: one shared notebook for your AI agents
 
 Notes
-  hivenote list                           every note: name and one-line description
+  hivenote list [FOLDER/]                 every note: name and one-line description (a name like deploy/notes is in a folder)
   hivenote read NAME...                   the full notes, with their latest progress
   hivenote search WORDS
   hivenote add NAME "description" "text"  a new note (text can be left out)
@@ -30,15 +30,18 @@ Notes
   hivenote restore NAME VERSION           undo: bring back an earlier version
 
 Tasks
-  hivenote task NAME "description"        a new task
-  hivenote tasks                          the board: status, who, how long ago
-  hivenote mark NAME doing                take it, and see its text and progress; refused if another agent has it or
-                                          finished it (--anyway overrides)
+  hivenote task NAME "description"        a new task (--after OTHER,... for one that waits on others to be done)
+  hivenote tasks                          the board: status, who, how long ago, what each waits on
+  hivenote ready                          todo tasks with nothing left to wait on
+  hivenote take                           take the next ready task, and see its text and progress
+  hivenote mark NAME doing                take this one; refused if another agent has it or finished it (--anyway
+                                          overrides), unless it has been idle for 2 hours
   hivenote mark NAME done                 (or todo, cancelled)
   hivenote mark NAME done "what you did"  leave a progress line and mark it, in one go
   hivenote wait NAME [done]               wait until it is done, or until it is added or changes at all
   hivenote wait                           wait until anything in the hive changes
                                           wait gives up after 9 minutes; end it with 90s, 30m, 2h or forever to choose
+  hivenote after NAME OTHER...            NAME also waits on these tasks (after NAME not OTHER... to stop)
 
 Machines
   hivenote serve [HOST][:PORT]            be the queen: share this hive (default 127.0.0.1:7391)
@@ -78,7 +81,7 @@ interface LocalStore extends Store {
  * A person at a terminal gets a readable view; agents, scripts and --json get JSON.
  * That JSON is lean, the parts an agent acts on, unless --full asks for the stored record.
  */
-const view: { human: boolean; full: boolean; command: string; since?: number; anyway: boolean; writtenOut: boolean } = { human: false, full: false, command: '', anyway: false, writtenOut: false };
+const view: { human: boolean; full: boolean; command: string; since?: number; anyway: boolean; after?: string[]; writtenOut: boolean } = { human: false, full: false, command: '', anyway: false, writtenOut: false };
 
 /** Said when text arrives with \n typed out: a shell passes those two characters on as they are. */
 function writtenOut(name: string): string {
@@ -101,13 +104,18 @@ function fail(message: string): never {
   throw new HiveNoteError('invalid_args', message);
 }
 
-interface Words { words: string[]; agent?: string; since?: number; json: boolean; full: boolean; anyway: boolean; help: boolean; version: boolean }
+interface Words { words: string[]; agent?: string; since?: number; after?: string[]; json: boolean; full: boolean; anyway: boolean; help: boolean; version: boolean }
 
 /** Commands whose words after the name are text to save, exactly as given. */
 const SAVES_TEXT = new Set(['add', 'task', 'edit', 'append', 'replace', 'describe']);
 
+/** Task names given as one word, a,b, or as several. */
+function names(words: string[]): string[] {
+  return words.flatMap(word => word.split(',')).map(name => name.trim()).filter(Boolean);
+}
+
 /**
- * Only --agent NAME, --since SEQ, --json, --full and (for mark) --anyway are options (plus help and version); every other word is text.
+ * Only --agent NAME, --since SEQ, --json, --full, (for task) --after NAMES and (for mark) --anyway are options (plus help and version); every other word is text.
  * The text a command must be given is never read as an option, so a note can say "--help".
  * Help and version count only before the note's name.
  */
@@ -127,6 +135,10 @@ function parse(argv: string[]): Words {
       const seq = argv[++i];
       if (!seq || !/^\d+$/u.test(seq)) fail('--since needs the seq number an earlier answer gave: --since 47');
       result.since = Number(seq);
+    } else if (word === '--after' && (command === undefined || command === 'task')) {
+      const after = names([argv[++i] ?? '']);
+      if (!after.length) fail('--after needs the tasks this one waits on: --after build-api,review-api');
+      (result.after ??= []).push(...after);
     } else if (word === '--json') result.json = true;
     else if (word === '--full') result.full = true;
     else if (word === '--anyway' && (command === undefined || command === 'mark')) result.anyway = true;
@@ -206,8 +218,9 @@ async function openLocalStore(config: Config): Promise<LocalStore> {
   quietSqliteWarning();
   // Loaded only for a hive on this machine, so workers never need SQLite.
   const modulePath = './sqlite.js';
-  const { SqliteStore } = await import(modulePath) as { SqliteStore: new (path: string, actor?: Actor) => LocalStore };
-  return new SqliteStore(config.db ?? defaultDbPath(), actor);
+  const { SqliteStore } = await import(modulePath) as { SqliteStore: new (path: string, actor?: Actor, options?: { takeoverMs?: number }) => LocalStore };
+  const takeover = takeoverMs(config);
+  return new SqliteStore(config.db ?? defaultDbPath(), actor, takeover === undefined ? {} : { takeoverMs: takeover });
 }
 
 /** The queen's hive when connected; otherwise the file on this machine. */
@@ -226,7 +239,7 @@ type Run = (words: string[], store: Store) => Promise<unknown>;
 /**
  * Every page of a listing, latest activity first; names and descriptions are small, so a listing
  * is always complete. The hive hands the pages over by name, an order that a write between two
- * pages cannot shuffle, and they are sorted here.
+ * pages cannot shuffle, and they are sorted here. Ready tasks keep the hive's order, the one take goes by.
  */
 async function everything(store: Store, filter: Params): Promise<unknown> {
   type Entry = { name: string; kind: string; updated_at: string; activity_at?: string; updated_by?: string; last_attribution?: { agent?: string; device: string } };
@@ -243,7 +256,7 @@ async function everything(store: Store, filter: Params): Promise<unknown> {
     if (!page.has_more) break;
   }
   const latest = (note: Entry): string => note.activity_at ?? note.updated_at;
-  notes.sort((a, b) => (latest(a) < latest(b) ? 1 : latest(a) > latest(b) ? -1 : a.name < b.name ? -1 : 1));
+  if (!filter.ready) notes.sort((a, b) => (latest(a) < latest(b) ? 1 : latest(a) > latest(b) ? -1 : a.name < b.name ? -1 : 1));
   return { notes, total: notes.length, ...(seq === undefined ? {} : { seq }) };
 }
 
@@ -327,8 +340,34 @@ async function news(store: Store, notes: { id: string }[], feed: Feed): Promise<
 }
 
 const NOTES: Record<string, { usage: string; min: number; max: number; run: Run }> = {
-  list: { usage: 'list', min: 0, max: 0, run: (_, store) => everything(store, {}) },
+  list: {
+    usage: 'list [FOLDER/]', min: 0, max: 1,
+    run: async ([folder], store) => {
+      if (folder === undefined) return everything(store, {});
+      const listed = await everything(store, { folder }) as { total: number };
+      // A word that is not a folder is more likely a search, or a name, than a folder with nothing in it.
+      if (!listed.total) throw new HiveNoteError('not_found', `No notes in a folder named '${folder.replace(/\/+$/u, '')}/'. hivenote list shows every note, and hivenote search WORDS finds them by what they say`, 404);
+      return listed;
+    },
+  },
   tasks: { usage: 'tasks', min: 0, max: 0, run: (_, store) => everything(store, { kind: 'task' }) },
+  ready: { usage: 'ready', min: 0, max: 0, run: (_, store) => everything(store, { ready: true }) },
+  take: {
+    usage: 'take', min: 0, max: 0,
+    run: async (_, store) => {
+      const taken = await store.call('take', {}) as { note: { name: string } };
+      return shown(store, taken.note.name, taken);
+    },
+  },
+  after: {
+    usage: 'after NAME OTHER... | after NAME not OTHER...', min: 2, max: 101,
+    run: async ([note, ...rest], store) => {
+      const removing = rest[0] === 'not';
+      const others = names(removing ? rest.slice(1) : rest);
+      if (!others.length) fail('Usage: hivenote after NAME OTHER... | after NAME not OTHER...');
+      return store.call('update_task', { note, ...(removing ? { not_after: others } : { after: others }) });
+    },
+  },
   read: {
     usage: 'read NAME...', min: 1, max: 100,
     run: async (names, store) => {
@@ -348,7 +387,7 @@ const NOTES: Record<string, { usage: string; min: number; max: number; run: Run 
   },
   task: {
     usage: 'task NAME "description"', min: 2, max: 3,
-    run: ([name, description, content], store) => store.call('create', { name, description: text(description!), content: content === undefined ? '' : body(content), kind: 'task', status: 'todo' }),
+    run: ([name, description, content], store) => store.call('create', { name, description: text(description!), content: content === undefined ? '' : body(content), kind: 'task', status: 'todo', ...(view.after ? { after: view.after } : {}) }),
   },
   edit: { usage: 'edit NAME "old text" "new text"', min: 3, max: 3, run: ([note, old, replacement], store) => store.call('edit', { note, old_str: text(old!), new_str: body(replacement!) }) },
   append: { usage: 'append NAME "progress"', min: 2, max: 2, run: ([note, progress], store) => store.call('append', { note, body: body(progress!) }) },
@@ -681,7 +720,7 @@ function unknownCommand(command: string): never {
 // ---------- Main ----------
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
-  const { words, agent, since, json, full, anyway, help, version } = parse(argv);
+  const { words, agent, since, after, json, full, anyway, help, version } = parse(argv);
   // Readable output only for a person typing in a terminal: never for a detected agent or --agent.
   view.human = process.stdout.isTTY === true && !json && !full && agent === undefined && detectAgent() === undefined;
   view.full = full;
@@ -720,6 +759,10 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   if (anyway) {
     if (command !== 'mark') fail('--anyway goes with mark: hivenote mark NAME doing --anyway');
     view.anyway = true;
+  }
+  if (after) {
+    if (command !== 'task') fail('--after goes with task: hivenote task NAME "description" --after OTHER. For a task that exists: hivenote after NAME OTHER');
+    view.after = after;
   }
   if (words.length < spec.min || words.length > spec.max) fail(`Usage: hivenote ${spec.usage}`);
   const store = await openStore(config);

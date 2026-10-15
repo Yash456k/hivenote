@@ -6,7 +6,7 @@ import { headsUp } from './lean.js';
  * JSON; the CLI only calls this when stdout is a terminal and no agent is detected.
  */
 
-interface Brief { name: string; description: string; kind: string; status?: string | null; snippet?: string; updated_at?: string; activity_at?: string; updated_by?: string; changed_by?: string; active_by?: string }
+interface Brief { name: string; description: string; kind: string; status?: string | null; snippet?: string; updated_at?: string; activity_at?: string; updated_by?: string; changed_by?: string; active_by?: string; waits_on?: string[] }
 interface Note extends Brief { id: string; content: string; rev: number; last_attribution?: Who; last_activity_attribution?: Who }
 type Who = Attribution;
 interface Change { note: string; kind: string; by: string; at: string; body?: string; status?: string }
@@ -34,17 +34,35 @@ function sticker(note: Brief): string {
   const by = note.changed_by ?? note.updated_by;
   // One name with one age; when someone else posted the latest line, that is said beside it.
   const others = note.active_by !== undefined && note.active_by !== by && note.activity_at !== note.updated_at && note.updated_at !== undefined;
-  const parts = [note.status ?? 'todo', by, others ? ago(note.updated_at!) : when && ago(when), others && `last line ${note.active_by} ${ago(when!)}`].filter(Boolean);
+  const parts = [note.status ?? 'todo', by, others ? ago(note.updated_at!) : when && ago(when), others && `last line ${note.active_by} ${ago(when!)}`, note.waits_on?.length && `waits on ${note.waits_on.join(', ')}`].filter(Boolean);
   return dim(`[${parts.join(' · ')}]`);
 }
 
-function listing(notes: Brief[], empty: string): string {
+function listing(notes: Brief[], empty: string, indent = ''): string {
   if (!notes.length) return empty;
   const width = Math.min(32, Math.max(...notes.map(note => note.name.length)));
   return notes.map(note => {
-    const line = `${bold(note.name.padEnd(width))}  ${note.description}${note.kind === 'task' ? `  ${sticker(note)}` : ''}`;
-    return note.snippet ? `${line}\n${' '.repeat(width + 2)}${dim(note.snippet.replaceAll('\n', ' '))}` : line;
+    const line = `${indent}${bold(note.name.padEnd(width))}  ${note.description}${note.kind === 'task' ? `  ${sticker(note)}` : ''}`;
+    return note.snippet ? `${line}\n${indent}${' '.repeat(width + 2)}${dim(note.snippet.replaceAll('\n', ' '))}` : line;
   }).join('\n');
+}
+
+/**
+ * A name's folder is the part before its last /. Notes outside any folder come first; then each folder
+ * under its path, in order of path, with the names in it shown without the path.
+ */
+function folders(notes: Brief[], empty: string): string {
+  const groups = new Map<string, Brief[]>();
+  for (const note of notes) {
+    const cut = note.name.lastIndexOf('/');
+    const folder = cut > 0 ? note.name.slice(0, cut + 1) : '';
+    groups.set(folder, [...groups.get(folder) ?? [], cut > 0 ? { ...note, name: note.name.slice(cut + 1) } : note]);
+  }
+  if (groups.size === 1 && groups.has('')) return listing(notes, empty);
+  const top = groups.get('');
+  groups.delete('');
+  const inFolders = [...groups].sort(([a], [b]) => (a < b ? -1 : 1)).map(([folder, inside]) => `${dim(folder)}\n${listing(inside, '', '  ')}`);
+  return [...(top ? [listing(top, '')] : []), ...inFolders].join('\n');
 }
 
 function page(note: Note, updates: Event[]): string {
@@ -84,8 +102,9 @@ export function pretty(command: string, value: unknown): string {
   const note = v.note as Note | undefined;
   switch (command) {
     case 'version': return `hivenote ${String(v.version)}`;
-    case 'list': return listing(v.notes as Brief[], 'No notes yet. Add one: hivenote add NAME "description" "text"');
+    case 'list': return folders(v.notes as Brief[], 'No notes yet. Add one: hivenote add NAME "description" "text"');
     case 'tasks': return listing(v.notes as Brief[], 'No tasks yet. Add one: hivenote task NAME "description"');
+    case 'ready': return listing(v.notes as Brief[], 'Nothing is ready. hivenote tasks shows the board.');
     case 'search': return listing(v.notes as Brief[], 'Nothing matches.');
     case 'read': {
       const pages = (v.notes as Note[]).map(item => page(item, (v.updates as Event[] | undefined) ?? []));
@@ -102,19 +121,23 @@ export function pretty(command: string, value: unknown): string {
     }
     case 'history': return `${Number(v.offset) > 0 ? dim(`(${String(v.offset)} earlier changes not shown)`) + '\n' : ''}${history(v.events as Event[])}`;
     case 'add': return `Added ${bold(note!.name)}`;
-    case 'task': return `Added task ${bold(note!.name)}`;
+    case 'task': return `Added task ${bold(note!.name)}${Array.isArray(v.after) && v.after.length ? dim(`, after ${(v.after as string[]).join(', ')}`) : ''}`;
+    case 'after': return Array.isArray(v.after) && v.after.length ? `${bold(note!.name)} waits on ${(v.after as string[]).join(', ')}` : `${bold(note!.name)} waits on no other task`;
     case 'edit': return `Edited ${bold(note!.name)}`;
     case 'append': return `Added progress to ${bold(note!.name)}`;
     case 'replace': return `Rewrote ${bold(note!.name)}`;
     case 'describe': return `Changed the description of ${bold(note!.name)}`;
     case 'delete': return `Deleted ${bold(note!.name)} ${dim(`(undo: hivenote restore ${note!.name} ${note!.rev - 1})`)}`;
     case 'restore': return `Restored ${bold(note!.name)}`;
-    case 'mark': {
+    case 'mark': case 'take': {
       const warning = headsUp(v as unknown as Parameters<typeof headsUp>[0]);
-      return `Marked ${bold(note!.name)} ${note!.status ?? 'todo'}${warning ? `\n${dim(warning)}` : ''}`;
+      const over = v.taken_over as { from: string; at: string } | undefined;
+      const took = over ? `\n${dim(`Taken over from ${over.from}, idle since ${ago(over.at)}`)}` : '';
+      if (command === 'take') return `Took ${bold(note!.name)}${took}\n${dim(note!.description)}${note!.content ? `\n\n${note!.content}` : ''}`;
+      return `Marked ${bold(note!.name)} ${note!.status ?? 'todo'}${took}${warning ? `\n${dim(warning)}` : ''}`;
     }
     case 'status': return v.hive === 'queen'
-      ? `Connected to the queen at ${String(v.url)}\n${dim(`${notes(v.notes)} · queen ${String(v.queen_version)} · this machine ${String(v.this_version)} · ${String(v.round_trip_ms)} ms · connection ${String(v.connection)}`)}`
+      ? `Connected to the queen at ${String(v.url)}\n${dim(`${notes(v.notes)} · queen ${String(v.queen_version)} · this machine ${String(v.this_version)} · ${String(v.round_trip_ms)} ms · connection ${String(v.connection)}${v.queued ? ` · ${String(v.queued)} kept writes waiting` : ''}`)}`
       : `Using this machine's own hive at ${String(v.db)}\n${dim(`${notes(v.notes)} · version ${String(v.version)}`)}`;
     case 'connect': return `Connected to the queen at ${String(v.connected)} (${notes(v.entries)}). Every hivenote command here now uses that hive.`;
     case 'disconnect': return 'Disconnected. This machine uses its own hive again. To shut the old token out too, run hivenote token remove LABEL on the queen.';

@@ -13,14 +13,19 @@ import { age, byline, type Event, type Note, type Previous } from './contract.js
  */
 
 type Json = Record<string, unknown>;
-interface Receipt { note: Note; previous?: Previous; task?: { note: Note; updates?: Event[]; updates_has_more?: boolean; seq?: number } }
+interface Receipt {
+  note: Note; previous?: Previous; after?: string[]; taken_over?: { from: string; at: string };
+  task?: { note: Note; updates?: Event[]; updates_has_more?: boolean; seq?: number };
+}
 
 /** A note as text to act on: what it is, its state, who changed it last, and what it says. */
 function note(stored: Note, now: number): Json {
   const out: Json = { name: stored.name, description: stored.description, kind: stored.kind };
   if (stored.status !== null) out.status = stored.status;
   if (stored.due_at !== null) out.due_at = stored.due_at;
-  if (Object.keys(stored.metadata ?? {}).length) out.metadata = stored.metadata;
+  // The tasks it waits on are kept there by id; they are shown by name as waits_on instead.
+  const { after: _after, ...metadata } = stored.metadata ?? {};
+  if (Object.keys(metadata).length) out.metadata = metadata;
   out.updated_by = byline(stored.last_attribution);
   out.ago = age(stored.updated_at, now);
   out.content = stored.content;
@@ -34,9 +39,9 @@ function progress(stored: Note, updates: Event[] = [], now: number): Json[] {
     .map(update => ({ by: byline(update.attribution), ago: age(update.timestamp, now), text: update.body }));
 }
 
-/** A note with its progress lines under it. */
-function page(stored: Note, updates: Event[] = [], now: number): Json {
-  return { ...note(stored, now), progress: progress(stored, updates, now) };
+/** A note with its progress lines under it, and for a task the unfinished tasks it waits on. */
+function page(stored: Note, updates: Event[] = [], now: number, waitsOn?: string[]): Json {
+  return { ...note(stored, now), ...(waitsOn?.length ? { waits_on: waitsOn } : {}), progress: progress(stored, updates, now) };
 }
 
 /**
@@ -150,8 +155,9 @@ export function word(name: string): string {
  * task reopened, a task already being worked on), say so in the answer, so an agent acting
  * on an old look at the board finds out at once and can put it right.
  */
-export function headsUp({ note: task, previous, task: shown }: Receipt): string | undefined {
-  if (!previous || previous.by === byline(task.last_attribution)) return undefined;
+export function headsUp({ note: task, previous, task: shown, taken_over }: Receipt): string | undefined {
+  // Taken over from an agent that had gone quiet: the answer says that itself.
+  if (!previous || taken_over || previous.by === byline(task.last_attribution)) return undefined;
   const ago = age(previous.at, task.updated_at);
   const closed = previous.status === 'done' || previous.status === 'cancelled';
   if (closed && (task.status === 'todo' || task.status === 'doing')) {
@@ -169,20 +175,22 @@ export function headsUp({ note: task, previous, task: shown }: Receipt): string 
 
 const DID: Record<string, string> = {
   add: 'added', task: 'added', edit: 'edited', append: 'appended', replace: 'replaced',
-  describe: 'described', delete: 'deleted', restore: 'restored', mark: 'marked',
+  describe: 'described', delete: 'deleted', restore: 'restored', mark: 'marked', take: 'taken', after: 'updated',
 };
 
 /** A write is answered with what happened, not with the note that was just sent. */
 function done(command: string, receipt: Receipt, now: number): Json {
-  const { note: saved, previous, task } = receipt;
+  const { note: saved, previous, task, after, taken_over } = receipt;
   const out: Json = { ok: DID[command], note: saved.name };
   if (command === 'task') out.status = saved.status;
+  if (after) out.after = after;
   if (command === 'edit' || command === 'replace' || command === 'describe' || command === 'restore') out.version = saved.rev;
   if (command === 'restore' && saved.status !== null) out.status = saved.status;
   if (command === 'delete') out.undo = `hivenote restore ${word(saved.name)} ${saved.rev - 1}`;
-  if (command === 'mark') {
+  if (command === 'mark' || command === 'take') {
     out.status = saved.status;
     if (previous) out.was = previous.status;
+    if (taken_over) out.taken_over = { from: taken_over.from, idle: age(taken_over.at, saved.updated_at) };
     const warning = headsUp(receipt);
     if (warning) out.heads_up = warning;
     // A task that was just taken is shown, so whoever took it can start without reading it first.
@@ -199,6 +207,7 @@ function done(command: string, receipt: Receipt, now: number): Json {
 
 interface Read {
   notes: Note[]; missing: string[]; updates?: Event[]; updates_has_more?: boolean;
+  waits_on?: Record<string, string[]>;
   news?: News;
 }
 /**
@@ -215,10 +224,10 @@ interface News {
 export function lean(command: string, value: unknown, now = Date.now()): unknown {
   const v = value as Json;
   switch (command) {
-    case 'list': case 'tasks': case 'search':
+    case 'list': case 'tasks': case 'ready': case 'search':
       return { ...v, notes: (v.notes as Json[]).map(entry => aged(entry, now)) };
     case 'read': {
-      const { notes, missing, updates = [], updates_has_more: more, news, ...rest } = v as unknown as Read & { seq?: number };
+      const { notes, missing, updates = [], updates_has_more: more, waits_on: waitsOn = {}, news, ...rest } = v as unknown as Read & { seq?: number };
       const gaps = missing.length ? { missing } : {};
       if (news) {
         const unchanged = notes.filter(stored => !news.touched.includes(stored.id)).map(stored => stored.name);
@@ -227,7 +236,7 @@ export function lean(command: string, value: unknown, now = Date.now()): unknown
       }
       // Said in full, because an agent that never saw the guide does not connect a bare number with the flag.
       const again = notes.length && typeof rest.seq === 'number' ? { only_new: `hivenote read ${notes.map(stored => word(stored.name)).join(' ')} --since ${rest.seq}` } : {};
-      return { notes: notes.map(stored => page(stored, updates, now)), ...gaps, ...rest, ...again, ...(more ? { earlier_progress: `hivenote history ${notes.length === 1 ? word(notes[0]!.name) : 'NAME'}` } : {}) };
+      return { notes: notes.map(stored => page(stored, updates, now, waitsOn[stored.name])), ...gaps, ...rest, ...again, ...(more ? { earlier_progress: `hivenote history ${notes.length === 1 ? word(notes[0]!.name) : 'NAME'}` } : {}) };
     }
     case 'wait': {
       // How long the wait took is of no use to whoever waited.
