@@ -7,13 +7,13 @@ description: Shared memory across agents. Use when starting work on a project (t
 
 HiveNote is one shared notebook for every agent the user runs (Claude Code, Codex, Hermes, and others), on this machine or others. When the hive lives on another machine, that machine is called the **queen**. Each note has a unique **name**, a one-line **description**, and **text**. Like skills, you decide what to open from the name and description alone.
 
-Every command prints JSON (if you ever get plain text instead, add `--json`). It shows what you act on: a note's text, its state, who wrote what and how long ago (`"ago":"3m"`). A write answers with one short line such as `{"ok":"appended","note":"build-api"}`, so there is no need to read the note again to check it. `--full` prints the stored record instead (ids, every timestamp, the machine behind each change), which you rarely need; it leaves out the short answer's hints, so don't add it by habit. If a command can't reach the hive, run `hivenote status` and tell the user what it says. If `hivenote` is not found, tell the user to run `npm install -g hivenote` (it needs Node 22.16 or newer). `hivenote help` lists every command.
+Every command prints JSON (if you ever get plain text instead, add `--json`). It shows what you act on: a note's text, its state, who wrote what and how long ago (`"ago":"3m"`). A write answers with one short line such as `{"ok":"appended","note":"build-api"}`, so there is no need to read the note again to check it. `--full` prints the stored record instead (ids, every timestamp, the machine behind each change), which you rarely need; it leaves out the short answer's hints, so don't add it by habit. If a command can't reach the hive, run `hivenote status` and tell the user what it says. On a machine connected to a queen, a write made while she can't be reached answers `{"ok":"queued",...}`: it is kept on this machine and sent, in order, the next time a command reaches her, so don't make it again. Taking a task and reading need her and fail instead. If `hivenote` is not found, tell the user to run `npm install -g hivenote` (it needs Node 22.16 or newer). `hivenote help` lists every command.
 
 Each command is an ordinary shell command, so several fit on one line, and that line is one step for you, not three: `hivenote list && hivenote read build-api contract`. `&&` stops at the first command that fails, such as a `mark` that is refused.
 
 ## Before you start work
 
-1. `hivenote list` shows every note's name and description, the most recently active first.
+1. `hivenote list` shows every note's name and description, the most recently active first. `hivenote list deploy/` shows only the notes in the folder `deploy/`.
 2. Read what is relevant to your task: `hivenote read name-one name-two`
 3. Or search: `hivenote search deploy staging`
 
@@ -30,7 +30,7 @@ hivenote read build-api contract --since 47      # new progress, the status now,
 Save things the next agent would otherwise have to rediscover: decisions and why, current state, next steps, where things live, what failed. Not transcripts or step-by-step logs.
 
 - **Check before adding.** Search or list first, and update an existing note instead of making a near-duplicate.
-- **Name:** lowercase-kebab-case, named after the topic, e.g. `ask-my-portfolio`, `hermes-server`, `release-checklist`.
+- **Name:** lowercase-kebab-case, named after the topic, e.g. `ask-my-portfolio`, `hermes-server`, `release-checklist`. A `/` puts it in a folder, such as `deploy/staging-notes`; use folders that already exist (see `list`) before making new ones.
 - **Description:** one line saying what is inside and when to read it. Other agents decide from this line alone.
 
 ```sh
@@ -54,15 +54,23 @@ If an `edit` fails because the old text no longer matches, another agent changed
 ## Tasks and handoffs
 
 ```sh
-hivenote tasks                                   # the board: status, who changed it last, how long ago
+hivenote tasks                                   # the board: status, who changed it last, how long ago, what it waits on
 hivenote task build-api 'Build the booking API'
-hivenote mark build-api doing                    # takes it, and prints its text and progress
+hivenote task deploy 'Ship the API' --after build-api,review-api   # ready only once both are done
+hivenote after deploy smoke-test                 # deploy also waits on smoke-test (after deploy not smoke-test undoes it)
+hivenote ready                                   # tasks that can be started now
+hivenote take                                    # takes the next ready task, and prints its text and progress
+hivenote mark build-api doing                    # takes this one, and prints its text and progress
 hivenote append build-api 'Schema is in; endpoints next'
 hivenote mark build-api done 'What I did and what is left'   # leaves that as a progress line, then marks it
-hivenote mark build-api done 'What I did' && hivenote mark write-docs doing   # finish one, take the next
+hivenote mark build-api done 'What I did' && hivenote take   # finish one, take the next
 ```
 
-`mark NAME doing` takes the task: it puts your name and the time on it, and answers with the task's text and its progress so far, so there is no need to read it first. It is refused, and nothing changes, when another agent already has the task or has finished it. The answer says who and how long ago. Your picture of the board was old: pick another task, or read that one. If a task has said "doing" for hours, the agent on it may have stopped. Check its progress, and ask the user before taking it over with `hivenote mark NAME doing --anyway`.
+When you plan work that has an order, say so with `--after`, so nobody starts a task before what it needs is done. `waits_on` on the board names what a task still waits on.
+
+When you are told to work on whatever is next, use `hivenote take` rather than picking from the board yourself: the hive gives each agent a different task, even when several ask at once. If it answers `nothing_ready`, the message says why; `hivenote wait` wakes you when something changes.
+
+`mark NAME doing` takes a task you chose: it puts your name and the time on it, and answers with the task's text and its progress so far, so there is no need to read it first. It is refused, and nothing changes, when another agent already has the task or has finished it. The answer says who and how long ago. Your picture of the board was old: pick another task, or read that one. A task nobody has touched for 2 hours is taken all the same, by `mark NAME doing` or `take`, and the answer has `taken_over` with whose it was and how long it was idle: read its progress in the answer and carry on from there. Before that, if you think its agent has stopped, ask the user before taking it over with `hivenote mark NAME doing --anyway`.
 
 When the answer to another `mark` carries a `heads_up`, you have just replaced a state another agent set, such as setting a finished task back to `todo`. Read the task before going on, and put the status back if they were right.
 

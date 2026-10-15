@@ -25,6 +25,7 @@ dashboard ────┘ (ui/, reads through HTTP)
 | `tunnel.ts` | `serve public`: finding or downloading `cloudflared`, running it, and starting it again if it stops |
 | `helper.ts` | The connection helper on a worker: a background process that keeps one connection to the queen open, and the commands' side of talking to it |
 | `connect.ts`, `config.ts` | Saving which queen to use, and the token file |
+| `queue.ts` | On a worker: keeping writes made while the queen can't be reached, and sending them in order when she can |
 | `wait.ts` | Waiting for a note to change or a task to reach a status |
 | `mcp.ts` | The MCP tools |
 | `runtime.ts` | The Node version check and agent detection |
@@ -33,12 +34,15 @@ dashboard ────┘ (ui/, reads through HTTP)
 
 One SQLite file, opened with Node's built-in `node:sqlite` (Node 22.16 is the first with full-text search). Tables: `notes` (the current version of each note), `events` (every change, with a full copy of the note for each version), `receipts` (the answer to every write, by `op_id`, so a resent write isn't applied twice), `clients` (token hashes) and `notes_fts` (the search index, updated in the same transaction as the note).
 
+The tasks a task waits on are kept as a list of note IDs in its `metadata` (`metadata.after`), which needed no schema change; `ready` and `take` read them with SQLite's JSON functions. Folders are only names with a `/` in them.
+
 Writes take the write lock up front, check and change everything inside one transaction, and never wait on the network or other files while holding it. `PRAGMA user_version` records the schema version; see AGENTS.md for how a change to it must keep users' data.
 
 ## Rules that keep it simple
 
 - Notes are named by their name everywhere a person or agent types. IDs exist so renames and reused names keep separate histories.
 - There is no version checking or locking. The latest write wins, history keeps everything, and `restore` is the undo.
-- A task's status plus who changed it last and when is the whole coordination model.
+- A task's status, who changed it last and when, and the tasks it waits on are the whole coordination model. `take` and the check in `mark doing` are made inside the write, on the queen, so two agents can't both be given one task.
 - Workers never load SQLite, and normal commands never load the MCP SDK.
 - The connection helper is the only thing that runs between commands, and only on a worker. Nothing depends on it: every command works the same without it, just slower.
+- Writes kept while the queen is away are a file, not a process: the next command that reaches her sends them. Their `op_id`s are what make sending one again safe.

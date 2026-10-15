@@ -29,7 +29,7 @@ If you run more than one agent, they usually share work through a notes file in 
 - **It stays fast as the notes grow.** With 10,000 entries stored, 10 agents finished their writes 6.5 times sooner than with the official MCP memory server. On an empty store the two were about even.
 - **It works across tools and machines**, and on one machine it is a single file with no server and no network needed.
 
-It probably isn't worth it if you run a single agent on a single repo in one place. Tasks are kept minimal on purpose: a status, who has it, and its progress, not a planner for large dependency graphs.
+It probably isn't worth it if you run a single agent on a single repo in one place. Tasks are kept minimal on purpose: a status, who has it, its progress and what it waits on, not a project planner.
 
 These were measured on one 4-vCPU server; the setup, every number and a script to rerun them are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
@@ -37,23 +37,25 @@ These were measured on one 4-vCPU server; the setup, every number and a script t
 
 Every note has a name and a one-line description, so an agent lists the hive, opens only the notes that matter for its task, and updates them when it learns something new. It's the same way agents already pick skills. Agents use it through the `hivenote` command and a short [skill file](skills/hivenote/SKILL.md) that teaches them when to read and save. Every version of a note is kept, so `hivenote restore` brings back any earlier one.
 
-A note can also be a task. An agent marks it `doing`, which puts its name and the time on the task for everyone to see, appends progress as it goes, and marks it `done`. Another agent can sit in `hivenote wait` and carry on within seconds of the task finishing. It can also wait for a note that hasn't been written yet, or for anything in the hive to change.
+A note can also be a task, and a task can wait on others. An agent takes one, which puts its name and the time on the task for everyone to see, appends progress as it goes, and marks it `done`. Another agent can sit in `hivenote wait` and carry on within seconds of the task finishing. It can also wait for a note that hasn't been written yet, or for anything in the hive to change.
 
 ```sh
 # one agent plans the work
 hivenote task build-api "POST /bookings with conflict checks"
-hivenote task review-api "Review the API once build-api is done"
+hivenote task review-api "Review the API" --after build-api
 
 # a second one builds
-hivenote mark build-api doing     # takes the task and prints what it says
+hivenote take                     # takes the next task that is ready (build-api) and prints what it says
 hivenote append build-api "Endpoint works; adding the 409 path"
 hivenote mark build-api done
 
 # a third one, meanwhile, in one line
-hivenote wait build-api done && hivenote mark review-api doing    # goes on the moment the build finishes
+hivenote wait build-api done && hivenote take    # goes on with review-api the moment the build finishes
 ```
 
-Each of these is an ordinary shell command, so an agent can put several on one line with `&&` and spend one step on them, not three. `&&` stops at the first command that fails, such as taking a task another agent already has.
+Each of these is an ordinary shell command, so an agent can put several on one line with `&&` and spend one step on them, not three. `&&` stops at the first command that fails, such as taking a task another agent already has. A task whose agent went quiet for two hours can be taken by another.
+
+A name with a `/` puts a note in a folder: `deploy/staging-notes` is in `deploy/`, and `hivenote list deploy/` shows what is there.
 
 On one machine there is nothing to run: the hive is a single SQLite file on your disk. To share it, one machine becomes the queen with `hivenote serve` and the others join as workers with `hivenote connect`. Every agent on all of them then works from the same notes.
 
@@ -69,17 +71,19 @@ On one machine there is nothing to run: the hive is a single SQLite file on your
 
 | Command | What it does |
 |---|---|
-| `hivenote list` | Every note's name and description |
+| `hivenote list` | Every note's name and description (`list deploy/` for one folder) |
 | `hivenote read deploy api-decisions` | The full notes, with their latest progress |
 | `hivenote search deploy staging` | Full-text search across all notes |
 | `hivenote add NAME "description" "text"` | A new note |
 | `hivenote edit NAME "old text" "new text"` | Change one passage |
 | `hivenote append NAME "progress"` | Add progress without rewriting the note |
-| `hivenote task NAME "description"` | A new task |
-| `hivenote mark NAME doing` | Move a task along the board (`todo`, `doing`, `done`, `cancelled`); add `"what you did"` to leave a progress line with it. `doing` takes the task and prints its text and progress, and is refused when another agent has it or has finished it |
+| `hivenote task NAME "description"` | A new task; `--after OTHER,...` for one that waits on others to be done |
+| `hivenote ready` | The tasks nothing is left to wait on |
+| `hivenote take` | Take the next ready task and print its text and progress. Agents that ask at once each get a different one |
+| `hivenote mark NAME doing` | Move a task along the board (`todo`, `doing`, `done`, `cancelled`); add `"what you did"` to leave a progress line with it. `doing` takes that task, and is refused when another agent has it or has finished it |
 | `hivenote wait NAME done` | Block until another agent finishes it (`wait NAME` until it is added or changes, `wait` until anything does) |
 
-Agents get short JSON with the parts they act on (`--full` for the whole stored record); when you type a command yourself, you get a readable view. `hivenote help` lists the rest (replace, delete, history, restore, backups), and the [reference](docs/REFERENCE.md) covers all of it.
+Agents get short JSON with the parts they act on (`--full` for the whole stored record); when you type a command yourself, you get a readable view. `hivenote help` lists the rest (replace, delete, history, restore, after, backups), and the [reference](docs/REFERENCE.md) covers all of it.
 
 ## Run it yourself
 
@@ -117,6 +121,8 @@ hivenote connect                        # asks for the queen's URL (http://ITS-A
 hivenote status                         # checks the queen answers and the token works
 ```
 
+If the queen can't be reached, a worker keeps its writes and sends them, in order, the next time a command reaches her. Taking a task and reading still need her, and say so.
+
 If the machines aren't on the same network, the queen can open a tunnel to the internet herself:
 
 ```sh
@@ -129,7 +135,7 @@ Any other address works too: your LAN, Tailscale, or a tunnel you run. On a netw
 
 ### Updating
 
-Run `npm install -g hivenote@latest` on every machine, the queen first. Your notes, tokens and connections stay as they are. Restart `hivenote serve` on the queen so it runs the new version, and copy the skill again so agents learn any new commands.
+Run `npm install -g hivenote@latest` on every machine, the queen first. Your notes, tokens and connections stay as they are. A worker on 1.0 needs the queen on 1.0 for `ready`, `take`, `after` and folders, and says so when she is older. Restart `hivenote serve` on the queen so it runs the new version, and copy the skill again so agents learn any new commands.
 
 ## License
 

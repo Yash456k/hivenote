@@ -6,6 +6,7 @@ Everything the [README](../README.md) leaves out. `hivenote help` lists the comm
 
 ```sh
 hivenote list                                   # every note: name and one-line description
+hivenote list deploy/                           # the notes in a folder
 hivenote read deploy-notes api-decisions        # full notes, with their latest 20 progress lines
 hivenote search deploy staging                  # notes containing all of these words
 hivenote add deploy-notes "How we ship" "Run migrations on staging first."
@@ -20,7 +21,9 @@ hivenote restore deploy-notes 3                 # undo: bring back version 3
 
 Every note has a **name** (unique among notes that aren't deleted, at most 256 bytes), a one-line **description** (at most 4 KB) and **text** (at most 512 KB). Notes are always named by their name. A name keeps one history: add a note under the name of a deleted one and it continues that note, so the old versions are still in `history`. Each note also has an ID inside; it shows up in JSON but no command asks for it.
 
-The description and text a command needs are saved exactly as written, even when they look like an option, so a note can say `--help`. Any text argument can be `-`, which reads the text from stdin: a file piped in, or a heredoc. Use that for the one case words can't express: an optional text (the third word of `add` or `task`) that is exactly `--json` or `--agent`. Text that is valid UTF-8 is stored exactly as given. A file saved in an older Windows encoding is read as Windows-1252, so letters like é survive.
+**Folders.** A name can contain `/`, and the part before the last `/` is the note's folder: `deploy/staging-notes` is in `deploy/`, and `deploy/prod/runbook` in `deploy/prod/`. There is nothing else to a folder; it exists while a note is in it. `hivenote list deploy/` shows everything under `deploy/`, subfolders included, and says so when nothing is there. At a terminal, plain `list` shows the notes outside any folder first, then each folder under its path. The JSON is the same as for any `list`, with each note under its full name.
+
+The description and text a command needs are saved exactly as written, even when they look like an option, so a note can say `--help`. Any text argument can be `-`, which reads the text from stdin: a file piped in, or a heredoc. Use that for the one case words can't express: an optional text (the third word of `add` or `task`) that is exactly `--json`, `--agent` or `--after`. Text that is valid UTF-8 is stored exactly as given. A file saved in an older Windows encoding is read as Windows-1252, so letters like é survive.
 
 **Changes and undo.** Every version of a note is kept in its history with who made it and when, including deletes: `restore` brings back any earlier version, and it finds a deleted note by its name. Progress lines are kept too, but they are not versions, so `restore` leaves them as they are. There is no version checking; the latest write wins. `edit` works on the current text and needs its old text to appear exactly once, so an edit based on outdated text is refused instead of landing in the wrong place. `append` adds a progress line without changing the note's text.
 
@@ -34,8 +37,13 @@ Shell habits are understood: `ls` is `list`, `cat` is `read`, `grep` and `find` 
 
 ```sh
 hivenote task build-api "POST /bookings with conflict checks"
-hivenote tasks                                  # the board
-hivenote mark build-api doing                   # take it and print it; refused when another agent has it or has finished it
+hivenote task deploy "Ship it" --after build-api,review-api   # waits until both are done
+hivenote after deploy smoke-test                # deploy also waits on smoke-test
+hivenote after deploy not review-api            # and no longer on review-api
+hivenote tasks                                  # the board, with what each task waits on
+hivenote ready                                  # todo tasks with nothing left to wait on
+hivenote take                                   # take the next ready task and print it
+hivenote mark build-api doing                   # take this one and print it; refused when another agent has it or has finished it
 hivenote mark build-api todo                    # or done, cancelled
 hivenote mark build-api done "what I did"       # leave a progress line and mark it, in one command
 hivenote wait build-api done                    # until it's done
@@ -45,9 +53,21 @@ hivenote wait build-api done 30m                # hold on for 30 minutes (90s, 2
 hivenote wait --since 47                        # count changes from an earlier answer's "seq", not from now
 ```
 
-A task is a note with a status. The board shows each task's status, who changed it last and how long ago, such as `[doing · codex · 2h ago]`. That is the whole coordination model: nothing is locked, and nothing expires. A task that has said `doing` for hours may belong to an agent that stopped; whoever sees it decides what to do.
+A task is a note with a status. The board shows each task's status, who changed it last and how long ago, and what it waits on, such as `[todo · planner · 2h ago · waits on build-api]`. That is the whole coordination model: nothing is locked.
 
-An agent can act on an old look at the board, so taking a task is checked by the hive: `mark NAME doing` is refused with the error `taken`, and changes nothing, when another agent marked the task `doing`, `done` or `cancelled`. The refusal names them and says how long ago. Two agents that ask at the same moment cannot both get the task. `--anyway` marks it all the same, for a task whose agent has stopped or a finished one that has to be reopened. The check is made by the queen when the machine that asks is on this version too; with an older queen, or from an older worker, the mark happens as before. Every other `mark` still happens whatever the task said: it says what that was (`"was":"doing"`), and adds a `heads_up` when the state it replaced was set by another agent, with the command that puts it back.
+**Waiting on other tasks.** `--after` names the tasks a new task waits on, separated by commas (or give `--after` more than once). `hivenote after NAME OTHER...` adds to them later and `hivenote after NAME not OTHER...` removes some; both answer with everything the task now waits on, as `after`. A task is ready when it is `todo` and each task it waits on is `done`; a `cancelled` one still holds it up, and a deleted one no longer does (restoring it brings the wait back). `tasks`, `list` and `read` give the ones not done yet as `waits_on`. A task can wait only on tasks, never on itself, and never on one that already waits on it, directly or through others. The hive keeps the tasks by their IDs, so renaming one keeps every link to it, and the screen always shows their current names. `mark` does not check them: marking a waiting task `doing` is allowed, for whoever knows better.
+
+**Taking a task.** `hivenote ready` lists the ready tasks, oldest first. `hivenote take` takes the first of them in one step and answers as `mark NAME doing` does, with `"ok":"taken"`. The queen picks the task and marks it inside one write, so agents that ask at the same moment each get a different one. When none is ready, it takes a task whose agent has gone quiet (below). When there is nothing at all, it exits with the error `nothing_ready`, which says how many tasks wait on others and how many are being done, so `hivenote take && ...` stops there.
+
+An agent can act on an old look at the board, so taking a task is checked by the hive: `mark NAME doing` is refused with the error `taken`, and changes nothing, when another agent marked the task `doing`, `done` or `cancelled`. The refusal names them and says how long ago. Two agents that ask at the same moment cannot both get the task. `--anyway` marks it all the same, for a finished task that has to be reopened, or a task whose agent you know has stopped. The check is made by the queen when the machine that asks is on 0.5 or newer too; with an older queen, or from an older worker, the mark happens as before. Every other `mark` still happens whatever the task said: it says what that was (`"was":"doing"`), and adds a `heads_up` when the state it replaced was set by another agent, with the command that puts it back.
+
+**A task whose agent stopped.** An agent that dies leaves its task `doing`. Once nothing has happened on such a task for 2 hours (no mark, no edit, no progress line from anyone), `mark NAME doing` and `take` take it without `--anyway`, and the answer says from whom and for how long it was idle: `"taken_over":{"from":"builder@laptop","idle":"3h"}`. Its progress is in the same answer. The time is set on the machine that holds the hive (the queen, or this machine for a local hive) with a line in its `config.json`, read when a command or `serve` starts:
+
+```json
+{ "takeover": "45m" }
+```
+
+`90m`, `2h`, `1d` and so on work, and `"off"` means a task is never taken over this way.
 
 `wait` returns within a moment of the change it is waiting for: the hive holds the question open and answers when something happens (a queen older than 0.5 is asked every 5 seconds instead). It waits for up to 9 minutes, then exits with an error, which keeps it under the 10-minute limit agents such as Claude Code put on one command. A script or service with no such limit can end the command with its own: `90s`, `30m`, `2h`, or `forever` to never give up. Waiting for a status checks how things stand first, so a loop that waits again after a timeout misses nothing; the limit word is always the last one, so a note that is itself named `forever` is waited for as `hivenote wait forever forever`. If the note doesn't exist yet, it says so and holds on until someone adds it. With no name, it returns as soon as anything in the hive changes and lists each change: the note, what happened, and who did it. It follows the note it found first, so a different task created later under the same name never counts. If the queen restarts or the network drops while waiting, it keeps checking until its time is up. It only reads, so `hivenote wait build-api done && your-command` is how a script carries on afterwards. When its time is up, the error says where the task stands: `'build-api' did not reach done within 45 seconds. It is doing, last changed 3m ago by codex@laptop`.
 
@@ -92,7 +112,9 @@ hivenote status                                 # which hive, and whether it ans
 hivenote disconnect                             # back to this machine's own hive
 ```
 
-`connect` checks the URL and token before saving them, keeps the token in a private file (mode 600) in HiveNote's settings folder, and from then on every note and task command on that machine, including agents', uses the queen. `ui`, `serve`, `token` and `backup` only run on the machine that holds the hive; from a worker, open the queen's dashboard at her address instead. A machine that is already connected is offered the token it has: `hivenote connect NEW-ADDRESS` asks `Use the token saved for OLD-ADDRESS? [Y/n]`, and Enter means yes. A hive keeps its tokens when its address changes, so nothing has to be pasted again; if the queen at the new address turns the token down, `connect` asks for one as usual. The question is only asked in a terminal, since it sends the saved token to the address you gave; a piped token is used as given. If the queen can't be reached, commands fail; they never quietly fall back to a local hive. `status` says which of these is wrong: the queen is down, the address isn't a queen, or the token was rejected.
+`connect` checks the URL and token before saving them, keeps the token in a private file (mode 600) in HiveNote's settings folder, and from then on every note and task command on that machine, including agents', uses the queen. `ui`, `serve`, `token` and `backup` only run on the machine that holds the hive; from a worker, open the queen's dashboard at her address instead. A machine that is already connected is offered the token it has: `hivenote connect NEW-ADDRESS` asks `Use the token saved for OLD-ADDRESS? [Y/n]`, and Enter means yes. A hive keeps its tokens when its address changes, so nothing has to be pasted again; if the queen at the new address turns the token down, `connect` asks for one as usual. The question is only asked in a terminal, since it sends the saved token to the address you gave; a piped token is used as given. If the queen can't be reached, commands never quietly fall back to a local hive. `status` says which of these is wrong: the queen is down, the address isn't a queen, or the token was rejected.
+
+**While the queen is away.** A write that can't reach the queen (`add`, `task`, `edit`, `append`, `replace`, `describe`, `delete`, `restore`, `after`, and `mark` to anything but `doing`) is kept in `queue.jsonl` in the settings folder, and the command answers `{"ok":"queued","note","waiting"}`, `waiting` being how many are kept. The next command that reaches the queen, whatever it is, sends them first, in the order they were made, each under the agent's label it was made with. Each keeps the operation ID it was given when it was made, so one the queen already has (it got there, and only the answer was lost) is not made twice. One she refuses, such as an `edit` whose old text has changed meanwhile, is said once on stderr and dropped. They are recorded at the time they arrive. Taking a task (`take`, `mark NAME doing`) is never kept, since whether the task is yours is the queen's answer, and neither is anything that reads: those fail, and say how many writes are waiting. `status` sends them too, and shows how many are left as `queued`. The MCP server does not keep writes.
 
 **`serve public`** gives the queen an address on the internet without an account, a domain or an open port. It serves the hive on 127.0.0.1 and runs Cloudflare's `cloudflared` program, which connects out to Cloudflare and gets a random `https://….trycloudflare.com` address (a [quick tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/)). The command prints that address; workers use it with `hivenote connect`, and the dashboard is at the same address. Every request still needs a token.
 
@@ -133,7 +155,7 @@ To turn the helper off on a machine, add a line to `config.json` in HiveNote's s
 
 The old queen can join as a worker too: `hivenote token add LABEL` on the new queen, then `hivenote connect NEW-ADDRESS` on the old one.
 
-**Versions.** The queen and its workers should run the same version. Every answer carries the queen's version, and a worker prints a warning when the two differ in their first two numbers, once a day and not on every command. Update the queen first.
+**Versions.** The queen and its workers should run the same version. Every answer carries the queen's version, and a worker prints a warning when the two differ in their first two numbers, once a day and not on every command. Update the queen first. A 1.0 worker with an older queen gets the error `queen_too_old`, and nothing changes, for `ready`, `take`, `after`, `task --after` and `list FOLDER/`; everything else works as before.
 
 ## Dashboard
 
@@ -147,10 +169,10 @@ Agents and scripts always get JSON: results on stdout, and errors on stderr as `
 
 That JSON holds what an agent acts on, not everything the hive stores:
 
-- `read` and `wait NAME` give each note as `name`, `description`, `kind`, `status`, `updated_by`, `ago`, `content` and `progress`, a list of `{by, ago, text}`.
-- `list`, `tasks` and `search` give `name`, `description`, `kind`, `ago`, and for tasks `status` and `updated_by`. `list` and `tasks` put the latest activity first. For a task, `updated_by` and `ago` are one event: the latest thing its last changer did, a progress line included. If someone else posted the latest line, that is given beside it as `last_line`, `{by, ago}`, so a task its owner has left does not look alive.
+- `read` and `wait NAME` give each note as `name`, `description`, `kind`, `status`, `updated_by`, `ago`, `content` and `progress`, a list of `{by, ago, text}`; `read` adds `waits_on` for a task that has some.
+- `list`, `tasks`, `ready` and `search` give `name`, `description`, `kind`, `ago`, and for tasks `status`, `updated_by` and, when some are not done, `waits_on`. `list` and `tasks` put the latest activity first. For a task, `updated_by` and `ago` are one event: the latest thing its last changer did, a progress line included. If someone else posted the latest line, that is given beside it as `last_line`, `{by, ago}`, so a task its owner has left does not look alive.
 - `history` gives one line per change: `version`, `kind`, `by`, `ago`, and `text` for a progress line.
-- A write answers with `{"ok", "note"}`, plus `version` after a change to the text, `status` and `was` after `mark` (and, when the mark was `doing`, the task's `description`, `content`, `progress` and the hive's `seq`), the `status` put back by a `restore` of a task, and `undo` after `delete`.
+- A write answers with `{"ok", "note"}`, plus `version` after a change to the text, `status` and `was` after `mark` and `take` (and, when the task was taken, its `description`, `content`, `progress` and the hive's `seq`, and `taken_over` when it came from an idle agent), `after` after `after` or `task --after`, the `status` put back by a `restore` of a task, and `undo` after `delete`. A write kept for a queen that can't be reached answers `{"ok":"queued", "note", "waiting"}`.
 - `ago` is an age, such as `40s`, `3m`, `2h` or `5d`. An agent seldom knows what time it is, so an age is what it can act on, and a timestamp costs about five times as many tokens. The exact times are in `--full`.
 - `list`, `tasks`, `read` and `wait` end with `seq`, for `--since`; `read` adds `only_new`, that command written out.
 
@@ -180,7 +202,7 @@ A newer HiveNote opens a database made by an older one. An older HiveNote refuse
 
 ## MCP
 
-`hivenote mcp` runs HiveNote as a stdio MCP server, against this machine's hive or the queen this machine is connected to. Its tools mirror the commands, and every tool that takes a note takes its name (`note`). Example for Claude Desktop:
+`hivenote mcp` runs HiveNote as a stdio MCP server, against this machine's hive or the queen this machine is connected to. Its tools are the HTTP methods below, and every tool that takes a note takes its name (`note`). `take` takes the next ready task; `list` takes `ready: true` and `folder`; `create` takes `after`; `update_task` takes `after` and `not_after`. Example for Claude Desktop:
 
 ```json
 { "mcpServers": { "hivenote": { "command": "hivenote", "args": ["mcp"] } } }
@@ -196,4 +218,12 @@ args = ["mcp"]
 
 ## HTTP
 
-The queen answers `POST /v1/call` with a JSON body `{"method", "params"}` and an `Authorization: Bearer TOKEN` header, and `GET /health` with `{"ok", "version", "queen"}`. Methods: `list`, `read`, `search`, `create`, `edit`, `replace`, `append`, `delete`, `history`, `revision`, `restore`, `changes`, `update_task`. Notes are named with `note` (their name); each write takes an `op_id`, and resending the same `op_id` returns the first answer instead of applying the change twice. The hive keeps the answers to its latest 2,000 writes for this; an `op_id` sent again after that is refused with `op_id_conflict`, and the change is still not applied twice. Requests are limited to 1 MB.
+The queen answers `POST /v1/call` with a JSON body `{"method", "params"}` and an `Authorization: Bearer TOKEN` header, and `GET /health` with `{"ok", "version", "queen"}`. Methods: `list`, `read`, `search`, `create`, `edit`, `replace`, `append`, `delete`, `history`, `revision`, `restore`, `changes`, `update_task`, `take`. Notes are named with `note` (their name); each write takes an `op_id`, and resending the same `op_id` returns the first answer instead of applying the change twice. The hive keeps the answers to its latest 2,000 writes for this; an `op_id` sent again after that is refused with `op_id_conflict`, and the change is still not applied twice. Requests are limited to 1 MB.
+
+What 1.0 added to the methods:
+
+- `list` takes `ready: true` (todo tasks whose prerequisites are all done, oldest first, the order `take` goes by) and `folder` (names that start with it and a `/`). Each task entry has `waits_on`, the names of its prerequisites that are not done, when there are any.
+- `read` answers with `waits_on`, an object from a task's name to those names, when any task read has some.
+- `create` (for a task) takes `after`, a list of task names. `update_task` takes `after` to add to them and `not_after` to remove some. The tasks are stored by ID in the task's `metadata.after`; the answer gives them by name as `after`. A metadata write that drops `after` drops the wait too.
+- `take {op_id}` claims the next ready task, or else the `doing` task idle longest past the takeover time, and answers like `update_task`; `nothing_ready` (404) when there is none.
+- A claim (`update_task` with `status: "doing"` and `claim: true`, or `take`) of a task idle past the takeover time answers with `taken_over: {from, at}`: who had it, and when anything last happened on it.
