@@ -20,13 +20,13 @@ Any agent that can run a shell command can use it, whichever tool it runs in and
 
 ## Why use it
 
-If you run more than one agent, they usually share work through a notes file in the repo, GitHub issues, or you copying between them. HiveNote does that job better on the things that go wrong:
+If you run more than one agent, they usually share work through a notes file in the repo, GitHub issues, or you copying between them. Here is what was measured where those go wrong:
 
-- **The waiting agent carries on in about 0.1 s** over the internet. Through notes in a GitHub repo pulled every 15 seconds, it found out after about 12 s.
-- **Two agents never take the same task.** 0 double claims in 100,000 attempts. When agents claimed at the same moment, GitHub Issues let several take 10 of 10 tasks, and Beads syncing two machines did the same.
-- **Nothing is lost when something crashes.** With the server killed by `kill -9` 50 times mid-write, 0 of 17,887 acknowledged writes were lost or duplicated, and a write sent again after a dropped connection is applied once.
-- **Agents read only what they need.** Finding the 3 notes it needs costs 8 to 10 times fewer tokens than reading one shared notes file.
-- **It stays fast as the notes grow.** At 10,000 entries it wrote 4 times faster than the official MCP memory server (on an empty store the memory server was faster).
+- **The waiting agent is told in about 0.1 s** over the internet. Through notes in a GitHub repo pulled every 15 seconds, it found out after about 12 s.
+- **Two agents never take the same task.** 1,000 tasks, each grabbed by 100 agents at once: one winner every time (with 0.5 or newer on every machine). When agents claimed at the same moment, GitHub Issues let several take 10 of 10 tasks, and Beads syncing two machines did the same.
+- **Nothing is lost when the server process is killed.** With the server killed by `kill -9` 50 times mid-write, 0 of 17,887 acknowledged writes were lost or duplicated, and a write sent again after a dropped connection is applied once.
+- **Agents read only what they need.** Finding the 3 notes it needs costs 7.6 to 10 times fewer tokens than reading one whole shared notes file (measured on made-up notes).
+- **It stays fast as the notes grow.** With 10,000 entries stored, 10 agents finished their writes 6.5 times sooner than with the official MCP memory server. On an empty store the two were about even.
 - **It works across tools and machines**, and on one machine it is a single file with no server and no network needed.
 
 It probably isn't worth it if you run a single agent on a single repo in one place. Tasks are kept minimal on purpose: a status, who has it, and its progress, not a planner for large dependency graphs.

@@ -11,7 +11,7 @@ if (!TOKEN) throw new Error('Set HN_URL and HN_TOKEN (bench/compare/run.sh does 
 export const now = () => Number(process.hrtime.bigint()) / 1e6; // ms
 
 // Plain node:http with a keep-alive agent. (Node 26's built-in fetch added
-// 0.4–2 s stalls after idle gaps in this setup while curl answered in ~4 ms,
+// 0.4 to 2 s stalls after idle gaps in this setup while curl answered in ~4 ms,
 // so fetch would have measured the client, not HiveNote.)
 const target = new URL(URL_BASE);
 const httpMod = target.protocol === 'https:' ? https : http;

@@ -35,6 +35,7 @@ async function startQueen() {
   throw new Error('queen did not start');
 }
 
+try {
 await startQueen();
 const NOTE = 'crash-log';
 await call('create', { id: uuid(), name: NOTE, description: 'crash test', content: 'x', op_id: uuid() });
@@ -75,4 +76,8 @@ const integrity = execFileSync('node', ['-e', `const {DatabaseSync}=require('nod
 queen.kill('SIGKILL');
 console.log(JSON.stringify({ bench: 'crash', kill9_crashes: R, agents: C, writes_acknowledged: acked.size, writes_attempted: intended.size,
   acknowledged_lost: lostAcked, attempted_lost: lostIntended, duplicated: doubled, client_retries: retries, busy_answers: busy, sqlite_integrity: integrity }));
-rmSync(home, { recursive: true, force: true });
+} finally {
+  queen?.kill('SIGKILL');
+  rmSync(home, { recursive: true, force: true });
+}
+

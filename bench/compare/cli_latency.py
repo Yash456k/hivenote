@@ -24,7 +24,7 @@ name = f'cli-{int(time.time())}'
 subprocess.run(['hivenote', 'add', name, 'cli latency', 'x'], env=base, capture_output=True, check=True)
 out = {'bench': 'cli_latency', 'queen': URL, 'runs': RUNS}
 for mode in ('off', 'on'):
-    env = {**base, 'HIVENOTE_HELPER': mode if mode == 'off' else '600'}
+    env = {**base, 'HIVENOTE_HELPER': mode if mode == 'off' else '30'}  # helper exits after 30 idle seconds
     subprocess.run(['hivenote', 'read', name], env=env, capture_output=True)  # warm (starts helper when on)
     for cmd in (['read', name], ['append', name, 'progress line']):
         xs = []
@@ -33,4 +33,5 @@ for mode in ('off', 'on'):
         out[f'helper_{mode}_{cmd[0]}_ms'] = st(xs)
 t = time.perf_counter(); subprocess.run(['node', '-e', '0'], check=True); out['bare_node_start_ms'] = round((time.perf_counter() - t) * 1000)
 subprocess.run(['hivenote', 'disconnect'], env=base, capture_output=True)
+import shutil; shutil.rmtree(home, ignore_errors=True)
 print(json.dumps(out))

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """What an agent reads to find the 3 notes it needs, as shared knowledge grows.
 
-Synthetic notes sized like Yash's real hive (27 notes: content median ~1.8 KB, mean
+Synthetic notes sized like a real 27-note hive (27 notes: content median ~1.8 KB, mean
 ~3.1 KB; description ~160 chars). Each note has a distinct topic word. The agent's
 job: get the full text of the 3 notes about its topic.
 
@@ -12,7 +12,7 @@ Measured as the bytes of real CLI output against a queen; tokens ~ bytes/4 (esti
 
 Usage: python3 token_cost.py [sizes=50,200,1000]
 """
-import json, os, random, subprocess, sys, tempfile, uuid
+import json, os, random, shutil, subprocess, sys, tempfile, uuid
 from urllib import request
 
 URL = os.environ.get('HN_URL', 'http://127.0.0.1:7499')
@@ -64,3 +64,4 @@ for size in sizes:
     r['search_route_reduction_x'] = round(r['shared_file_bytes'] / r['hive_search_plus_read_bytes'], 1)
     r['list_route_reduction_x'] = round(r['shared_file_bytes'] / r['hive_list_plus_read_bytes'], 1)
     print(json.dumps(r), flush=True)
+    shutil.rmtree(home, ignore_errors=True)

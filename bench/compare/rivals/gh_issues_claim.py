@@ -8,7 +8,7 @@ For each of I issues, A agents try to claim at once. Counted: issues with more
 than one claimant, API calls used, claim latency. HiveNote: same I tasks x A agents
 with `mark doing` (claim: true).
 
-Usage: python3 gh_issues_claim.py OWNER/REPO [issues=10] [agents=5]
+Usage: python3 gh_issues_claim.py OWNER/REPO [issues=10] [agents=5] [spread_s=0]
 """
 import json, subprocess, sys, threading, time, uuid, statistics
 from urllib import request
