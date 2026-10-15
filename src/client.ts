@@ -107,6 +107,9 @@ export class HttpStore implements Store {
       const object = payload as Record<string, unknown>;
       if (!response.ok) {
         const error = object.error as Record<string, unknown> | undefined;
+        if (tooOld(method, params, error)) {
+          throw new HiveNoteError('queen_too_old', `The queen runs HiveNote ${this.serverVersion ?? 'older than 1.0'}, and this needs 1.0 or newer there. Nothing was changed. Update the queen with npm install -g hivenote@latest, then restart hivenote serve`, 501);
+        }
         throw new HiveNoteError(typeof error?.code === 'string' ? error.code : 'http_error', typeof error?.message === 'string' ? error.message : `Server returned HTTP ${response.status}`, response.status, error?.details);
       }
       if (!Object.hasOwn(object, 'result')) throw new HiveNoteError('invalid_response', 'Server response is missing result', 502);
@@ -114,6 +117,13 @@ export class HttpStore implements Store {
     }
   }
   close(): void {}
+}
+/** Parameters added in 1.0. A queen before it refuses them as unknown, and a new method as no method at all. */
+const NEWER_PARAMS = ['after', 'not_after', 'ready', 'folder'];
+function tooOld(method: Method, params: Params, error: Record<string, unknown> | undefined): boolean {
+  const message = typeof error?.message === 'string' ? error.message : '';
+  if (method === 'take' && error?.code === 'invalid_request' && message.startsWith('Expected {method')) return true;
+  return error?.code === 'validation_error' && message.startsWith('Unknown parameter') && NEWER_PARAMS.some(key => params[key] !== undefined);
 }
 function pause(attempt: number): Promise<void> { return new Promise(resolve => setTimeout(resolve, Math.min(100 * 2 ** attempt, 1000))); }
 export { clientParams, HiveNoteError } from './contract.js';

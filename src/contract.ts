@@ -4,9 +4,9 @@ import { readFileSync } from 'node:fs';
 /** The package version, read from package.json so it is defined in one place. */
 export const VERSION = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version;
 
-export const METHODS = ['list','read','search','create','edit','replace','append','delete','history','revision','restore','changes','update_task'] as const;
+export const METHODS = ['list','read','search','create','edit','replace','append','delete','history','revision','restore','changes','update_task','take'] as const;
 export type Method = typeof METHODS[number];
-export const MUTATIONS = new Set<Method>(['create','edit','replace','append','delete','restore','update_task']);
+export const MUTATIONS = new Set<Method>(['create','edit','replace','append','delete','restore','update_task','take']);
 export type Params = Record<string, unknown>;
 export interface Store { call(method: Method, params?: Params): Promise<unknown>; close?(): void; }
 export interface Actor {
@@ -64,11 +64,15 @@ export function clientParams(method: Method, params: Params = {}): Params {
 }
 
 /* Wire contract (notes are named by `note`, their name; `id` is still accepted from older clients) (all optional fields omitted, not undefined):
- list {offset?,limit?,kind?,status?,detail?:'brief'|'full'} => {notes: BriefNote[] (or Omit<Note,'content'>[] when full), total,offset,has_more,seq}, by name
- read {ids?:string[],names?:string[]} exactly one selector => {notes:Note[],missing:string[],seq}
+ list {offset?,limit?,kind?,status?,ready?:true,folder?,detail?:'brief'|'full'} => {notes: BriefNote[] (or Omit<Note,'content'>[] when full), total,offset,has_more,seq}, by name
+ ready: todo tasks whose prerequisites are all done, oldest first. folder: names that start with folder + '/'.
+ A task's entry has waits_on: the names of its prerequisites that are not done yet, when there are any.
+ read {ids?:string[],names?:string[]} exactly one selector => {notes:Note[],missing:string[],waits_on?:{[name]:string[]},seq}
  seq is the number of the hive's latest change when the answer was made: changes {since:seq} gives what came after.
  search {query,offset?,limit?,detail?} => {notes:(BriefNote&{snippet})[],total,offset,has_more}
- create {id?:UUID,name,description,content,kind?,metadata?,status?,due_at?,op_id}
+ create {id?:UUID,name,description,content,kind?,metadata?,status?,due_at?,after?:string[],op_id}
+ after names the tasks a task waits on. They are stored by id in metadata.after, so a rename keeps the link;
+ the answer gives them by name as after.
  edit {note|id,old_str,new_str,op_id}; replace {note|id,content?,name?,description?,metadata?,op_id}
  append {note|id,body,op_id}; delete {note|id,op_id}
  history {note|id,offset?,limit?} => {events:Event[],total,offset,has_more} (deleted IDs allowed)
@@ -76,10 +80,14 @@ export function clientParams(method: Method, params: Params = {}): Params {
  restore {note|id,rev,op_id} (deleted ID allowed)
  changes {since?:seq,limit?,hold?:ms} | {tail:1-100} => {events:Event[],cursor,has_more}
  hold (at most 8000) keeps the question open until something comes after since, or the time is up; how wait wakes at once.
- update_task {note|id,status?,due_at?:ISO|null,metadata?,claim?:true,op_id}
+ update_task {note|id,status?,due_at?:ISO|null,metadata?,claim?:true,after?:string[],not_after?:string[],op_id}
+ after adds tasks to wait on, not_after removes them.
+ take {op_id} claims the oldest todo task whose prerequisites are all done or, when there is none, the doing task
+ idle longest past the takeover time; error nothing_ready, 404, when there is neither.
  Every mutation returns immutable {note:Note,event_seq:number,op_id:string}; append leaves rev unchanged.
  update_task with a status also returns previous:{status,by,at}, what the task said before.
  claim (with status doing) takes the task only if nobody else has it: when another agent marked it doing, done or
- cancelled, nothing changes and the answer is the error taken, 409, details {status,by,at}.
+ cancelled, nothing changes and the answer is the error taken, 409, details {status,by,at}. A doing task with nothing
+ done on it for the takeover time (2h unless set) is taken all the same, and the answer has taken_over:{from,at}.
  All errors HiveNoteError; conflict 409 details {current:Note}. Metadata/references inert.
  */

@@ -13,12 +13,18 @@ const kind = z.enum(['note', 'task']);
 const due = z.string().nullable();
 const page = { offset: integer.optional(), limit: z.number().int().positive().optional() };
 const detail = z.enum(['brief', 'full']).optional().describe("'brief' (default): id, name, description, kind, updated_at and task state. 'full': every stored field except content.");
+const tasks = (what: string) => z.array(z.string().min(1)).min(1).max(100).describe(what);
 const operation = { op_id: z.string().min(1).optional().describe('Stable operation ID for safe mutation retries; generated if omitted.') };
 const schemas: Record<Method, z.ZodType> = {
-  list: z.object({ ...page, kind: kind.optional(), status: status.optional(), detail }).strict(),
+  list: z.object({
+    ...page, kind: kind.optional(), status: status.optional(),
+    ready: z.literal(true).optional().describe('Only todo tasks whose prerequisites are all done, oldest first: the order take hands them out in.'),
+    folder: z.string().min(1).optional().describe("Only notes under this folder: names that start with it and a /, such as 'deploy' for deploy/staging-notes."),
+    detail,
+  }).strict(),
   read: z.object({ names: z.array(z.string().min(1)).min(1) }).strict(),
   search: z.object({ query: z.string(), ...page, detail }).strict(),
-  create: z.object({ name: z.string().min(1), description: z.string(), content: z.string(), kind: kind.optional(), metadata: metadata.optional(), status: status.optional(), due_at: due.optional(), ...operation }).strict(),
+  create: z.object({ name: z.string().min(1), description: z.string(), content: z.string(), kind: kind.optional(), metadata: metadata.optional(), status: status.optional(), due_at: due.optional(), after: tasks('For a task: the names of the tasks it waits on. It is ready once they are all done.').optional(), ...operation }).strict(),
   edit: z.object({ note, old_str: z.string().min(1), new_str: z.string(), ...operation }).strict(),
   replace: z.object({ note, content: z.string().optional(), name: z.string().min(1).optional(), description: z.string().optional(), metadata: metadata.optional(), ...operation }).strict(),
   append: z.object({ note, body: z.string(), ...operation }).strict(),
@@ -27,10 +33,11 @@ const schemas: Record<Method, z.ZodType> = {
   revision: z.object({ note, rev: revision }).strict(),
   restore: z.object({ note, rev: revision, ...operation }).strict(),
   changes: z.object({ since: integer.optional(), limit: z.number().int().positive().optional(), tail: z.number().int().positive().max(100).optional() }).strict(),
-  update_task: z.object({ note, status: status.optional(), due_at: due.optional(), metadata: metadata.optional(), claim: z.literal(true).optional(), ...operation }).strict(),
+  update_task: z.object({ note, status: status.optional(), due_at: due.optional(), metadata: metadata.optional(), claim: z.literal(true).optional(), after: tasks('Names of tasks this task should also wait on.').optional(), not_after: tasks('Names of tasks this task should no longer wait on.').optional(), ...operation }).strict(),
+  take: z.object({ ...operation }).strict(),
 };
 const descriptions: Record<Method, string> = {
-  list: 'List notes by name and description (brief by default) to decide what to read. No content.',
+  list: 'List notes by name and description (brief by default) to decide what to read. No content. A task that waits on unfinished tasks names them in waits_on.',
   read: 'Read full notes by their exact names, with recent progress. Missing names are reported.',
   search: 'Search notes with paginated matching summaries and snippets.',
   create: 'Create a note or task. Name is unique; content is literal data.',
@@ -42,7 +49,8 @@ const descriptions: Record<Method, string> = {
   revision: 'Read an immutable saved content revision.',
   restore: 'Undo: bring back a version from history (rev), including for deleted notes.',
   changes: 'Read the global change feed after since, or the newest `tail` events; continue with the returned cursor.',
-  update_task: 'Mark a task todo, doing, done or cancelled. The task then shows who changed it and when. To take a task, send status doing with claim true: it is refused if another agent has the task or has closed it.',
+  update_task: 'Mark a task todo, doing, done or cancelled. The task then shows who changed it and when. To take a task, send status doing with claim true: it is refused if another agent has the task or has closed it, unless that agent has left it idle for the takeover time (taken_over then says from whom). after and not_after change which tasks it waits on.',
+  take: 'Take the next task that is ready: the oldest todo task whose prerequisites are all done, claimed for you in the same step, so agents asking at once each get a different one. Error nothing_ready when there is none.',
 };
 export interface McpOptions { agent?: string; session?: string; }
 export function createMcpServer(store: Store, options: McpOptions = {}): McpServer {

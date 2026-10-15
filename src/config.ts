@@ -9,6 +9,8 @@ export interface Config {
   db?: string; url?: string; tokenFile?: string; agent?: string; session?: string;
   /** The connection helper on a worker: "off", "on", or how many idle seconds it stays. */
   helper?: string;
+  /** On the machine that holds the hive: how long a doing task sits idle before another agent may take it, such as "2h", or "off". */
+  takeover?: string;
 }
 export function configDirectory(env: NodeJS.ProcessEnv = process.env): string {
   if (env.HIVENOTE_HOME) return resolve(env.HIVENOTE_HOME);
@@ -27,7 +29,7 @@ export function defaultDbPath(): string { return join(dataDirectory(), 'data.db'
 function validate(input: unknown): Config {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new HiveNoteError('invalid_config', 'Config must be a JSON object');
   const value = input as Record<string, unknown>;
-  const allowed = ['db', 'url', 'tokenFile', 'agent', 'session', 'helper'];
+  const allowed = ['db', 'url', 'tokenFile', 'agent', 'session', 'helper', 'takeover'];
   if (Object.keys(value).some(key => !allowed.includes(key))) throw new HiveNoteError('invalid_config', 'Config contains unsupported fields');
   for (const key of allowed) if (value[key] !== undefined && (typeof value[key] !== 'string' || !value[key])) throw new HiveNoteError('invalid_config', `Config field ${key} must be a nonempty string`);
   if (value.db && value.url) throw new HiveNoteError('invalid_config', '--db and --url are mutually exclusive, including persistent configuration');
@@ -35,7 +37,14 @@ function validate(input: unknown): Config {
   for (const label of ['agent', 'session']) if (typeof value[label] === 'string' && value[label].length > 256) throw new HiveNoteError('invalid_config', `${label} label must be at most 256 characters`);
   if (value.tokenFile && !value.url) throw new HiveNoteError('invalid_config', 'tokenFile requires a remote URL');
   if (typeof value.helper === 'string' && !/^(on|off|\d+)$/u.test(value.helper)) throw new HiveNoteError('invalid_config', 'Config field helper must be "on", "off", or a number of idle seconds such as "300"');
+  if (typeof value.takeover === 'string' && !/^(off|\d+[smhd])$/u.test(value.takeover)) throw new HiveNoteError('invalid_config', 'Config field takeover must be a time such as "90m", "2h" or "1d", or "off"');
   return { ...value } as Config;
+}
+/** The takeover time in milliseconds; 0 when it is off, undefined to keep the default. */
+export function takeoverMs(config: Config): number | undefined {
+  const match = /^(\d+)([smhd])$/u.exec(config.takeover ?? '');
+  if (config.takeover === 'off') return 0;
+  return match ? Number(match[1]) * { s: 1, m: 60, h: 3600, d: 86400 }[match[2] as 's' | 'm' | 'h' | 'd'] * 1000 : undefined;
 }
 export function loadConfig(path = configPath()): Config {
   if (!existsSync(path)) return {};
