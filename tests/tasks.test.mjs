@@ -7,7 +7,8 @@ import { SqliteStore } from '../dist/sqlite.js';
 import { startServer } from '../dist/http.js';
 import { actor, cli, cliJson, closeServer, params, run, sandbox, serverUrl } from './helpers.mjs';
 
-const failed = result => JSON.parse(result.stderr).error;
+// The error is the last line; a worker may say first that the queen runs another version.
+const failed = result => JSON.parse(result.stderr.trim().split('\n').at(-1)).error;
 
 test('a task waits on others: ready shows what can start, and the link survives a rename', async t => {
   const db = join(await sandbox(t, 'after'), 'notes.db');

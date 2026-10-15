@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.0
+
+Tasks can wait on each other, agents can ask for the next one instead of picking it, a task whose agent stopped is picked up again, notes can be put in folders, and a worker keeps its writes while the queen is away. Nothing that worked before changes: old commands, the JSON they print and hive files made by 0.5 work as they did, and there is no schema change. A 1.0 worker needs the queen on 1.0 for `ready`, `take`, `after`, `task --after` and folders; with an older queen they fail with `queen_too_old` and change nothing, and everything else works.
+
+- **A task can wait on others.** `hivenote task deploy "Ship it" --after build-api,review-api` makes a task that is ready only once both are done. `hivenote after deploy smoke-test` adds one later and `hivenote after deploy not review-api` takes one away. The board shows what each task still waits on (`waits_on`), and `read` does too. The hive keeps them by ID, so renaming a task keeps every link to it. A task can't end up waiting on itself through others.
+- **`hivenote ready`** lists the tasks that can be started now: `todo`, with everything they wait on `done`. Oldest first.
+- **`hivenote take`** takes the next ready task and answers as `mark NAME doing` does, with its text and progress. The queen picks and marks it in one write, so agents that start together each get a different task: 16 agents asking at once for 12 tasks got one each, and the other 4 were told nothing was ready and why.
+- **A task whose agent stopped is picked up again.** A `doing` task with nothing done on it for 2 hours can be taken by `mark NAME doing` or `take` without `--anyway`, and the answer says from whom and how long it was idle (`"taken_over":{"from":"builder@laptop","idle":"3h"}`). Set the time with `{"takeover": "45m"}` in `config.json` on the machine that holds the hive, or `"off"`.
+- **Folders.** A name with a `/` is in a folder: `deploy/staging-notes` is in `deploy/`. `hivenote list deploy/` shows what is in it. At a terminal, `list` shows each folder under its path; the JSON is as before. The dashboard shows a note's folder above its name, and what a task waits on.
+- **A worker keeps its writes while the queen is away.** A write that can't reach her is kept on the worker and answered `{"ok":"queued",...}`; the next command that reaches her sends the kept writes first, in order. Each keeps the operation ID it was made with, so one that did arrive is not made twice, and one she refuses is said once and dropped. Taking a task and reading are never kept: they fail and say how many writes are waiting. `hivenote status` shows how many there are.
+- **MCP and HTTP:** a `take` method and tool; `list` takes `ready` and `folder`; `create` takes `after`; `update_task` takes `after` and `not_after`.
+
 ## 0.5.0
 
 Commands now print what an agent acts on, not everything the hive stores. Replayed over five recorded multi-agent runs, what the agents were shown came to 64% fewer tokens (about 85,000 a run down to about 31,000). A script that reads ids, attribution or the note a write returns adds `--full`. A 0.5 worker works with a 0.4 queen; the heads-up below needs the queen on 0.5. The HTTP API and the MCP tools answer as before, with fields added (`seq`, `activity_at`, `changed_by`, `active_by`, `previous`).
