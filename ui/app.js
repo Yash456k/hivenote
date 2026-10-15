@@ -200,11 +200,17 @@ function saveOrder() {
   remember(ORDER_KEY, JSON.stringify(state.order));
 }
 
+// A name like deploy/staging-notes is in the folder deploy/: shown small above the rest of the name.
+function title(name) {
+  const cut = name.lastIndexOf('/');
+  return el('strong', {}, cut > 0 && el('span', { class: 'folder', text: name.slice(0, cut + 1) }), cut > 0 ? name.slice(cut + 1) : name);
+}
+
 function fillCard(card, note) {
   const who = note.last_activity_attribution ? actorName(note.last_activity_attribution) : '';
   const content = note.content ?? '';
   card.replaceChildren(
-    el('strong', { text: note.name }),
+    title(note.name),
     note.description && el('p', { class: 'description', text: note.description }),
     content && el('div', { class: 'content', text: content.slice(0, 1200) }),
     el('div', { class: 'footer' }, who && avatar(who), who && el('span', { text: who }), el('span', { class: 'when', text: who ? `· ${ago(note.updated_at)}` : ago(note.updated_at) })),
@@ -392,12 +398,13 @@ function taskCard(task) {
   const meta = [
     task.due_at && el('span', { text: `due ${new Date(task.due_at).toLocaleDateString()}` }),
     task.status === 'cancelled' && el('span', { text: 'cancelled' }),
+    task.waits_on?.length && el('span', { text: `waits on ${task.waits_on.join(', ')}` }),
     // The sticker: who changed this task last, and how long ago.
     el('span', { text: (task.changed_by ?? task.updated_by) ? `${task.changed_by ?? task.updated_by} · ${ago(task.updated_at)}` : ago(task.updated_at) }),
   ];
   return el('button', { class: `card${task.status === 'cancelled' ? ' cancelled' : ''}`, 'data-id': task.id, onclick: () => openNote(task.id) },
     task.status === 'doing' && el('span', { class: 'worker' }, bee()),
-    el('strong', { text: task.name }),
+    title(task.name),
     task.description && el('p', { text: task.description }),
     el('div', { class: 'meta' }, ...meta),
   );
