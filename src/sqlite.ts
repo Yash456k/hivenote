@@ -577,23 +577,25 @@ export class SqliteStore implements Store {
     if (this.actor.scope !== 'rw') throw new HiveNoteError('forbidden', message, 403);
   }
 
-  tokenCreate(device: string, scope: 'ro' | 'rw' = 'rw'): { id: string; principal: string; device: string; scope: 'ro' | 'rw'; token: string } {
+  /** A standby token reads and writes like any other, and may also copy the hive for a standby copy. */
+  tokenCreate(device: string, scope: 'ro' | 'rw' = 'rw', standby = false): { id: string; principal: string; device: string; scope: 'ro' | 'rw'; standby: boolean; token: string } {
     this.requireLocalWriter('Read-only actor cannot administer tokens');
     text(device, 'device', LIMITS.label);
     if (scope !== 'ro' && scope !== 'rw') invalid('scope must be ro or rw');
+    if (standby && scope !== 'rw') invalid('A standby token is read/write');
     const token = randomBytes(32).toString('base64url');
     const client = { id: randomUUID(), principal: randomUUID() };
     // Only the hash is stored; the token is shown once.
     transaction(this.db, () => this.run(
-      'INSERT INTO clients(id,principal,device,token_hash,scope,created_at) VALUES(?,?,?,?,?,?)',
-      client.id, client.principal, device, sha256(token), scope, new Date().toISOString(),
+      'INSERT INTO clients(id,principal,device,token_hash,scope,created_at,standby) VALUES(?,?,?,?,?,?,?)',
+      client.id, client.principal, device, sha256(token), scope, new Date().toISOString(), standby ? 1 : 0,
     ));
-    return { ...client, device, scope, token };
+    return { ...client, device, scope, standby, token };
   }
 
   tokenList(): Row[] {
     this.requireLocalWriter('Token administration is local read/write only');
-    return this.all('SELECT id,principal,device,scope,revoked,created_at,revoked_at FROM clients ORDER BY created_at,id');
+    return this.all('SELECT id,principal,device,scope,standby,revoked,created_at,revoked_at FROM clients ORDER BY created_at,id');
   }
 
   /** Revoke every active token for a device label, such as laptop. Returns how many. */
@@ -609,9 +611,16 @@ export class SqliteStore implements Store {
 
   authenticate(token: string): Actor {
     if (typeof token !== 'string' || token.length < 40 || token.length > 256) throw new HiveNoteError('unauthorized', 'Invalid or revoked token', 401);
-    const row = this.get('SELECT principal,device,scope FROM clients WHERE token_hash=? AND revoked=0', sha256(token));
+    const row = this.get('SELECT principal,device,scope,standby FROM clients WHERE token_hash=? AND revoked=0', sha256(token));
     if (!row) throw new HiveNoteError('unauthorized', 'Invalid or revoked token', 401);
-    return { principal: row.principal as string, device: row.device as string, scope: row.scope as 'ro' | 'rw', verified: true };
+    return { principal: row.principal as string, device: row.device as string, scope: row.scope as 'ro' | 'rw', verified: true, ...(row.standby ? { standby: true } : {}) };
+  }
+
+  // ---------- A standby copy ----------
+
+  /** Every token, hashes included, for a standby copy. The server gives them only to a standby token. */
+  standbyTokens(): Row[] {
+    return this.all('SELECT id,principal,device,token_hash,scope,standby,revoked,created_at,revoked_at FROM clients ORDER BY created_at,id');
   }
 
   /** A consistent, integrity-checked copy of the database at a new path. */

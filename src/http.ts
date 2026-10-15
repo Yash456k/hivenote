@@ -6,7 +6,11 @@ import { fileURLToPath } from 'node:url';
 import { isMethod, MUTATIONS, HiveNoteError, VERSION, type Actor, type Method, type Params } from './contract.js';
 import { held } from './wait.js';
 
-export interface ServerStore { authenticate(token: string): Actor; execute(method: Method, params: Params, actor: Actor): unknown; }
+export interface ServerStore {
+  authenticate(token: string): Actor; execute(method: Method, params: Params, actor: Actor): unknown;
+  /** The tokens, hashes included, for a standby copy. */
+  standbyTokens?(): unknown;
+}
 export interface ServerOptions {
   host?: string; port?: number; dropResponseOnce?: boolean;
   /** `hivenote ui`: a key for this launch only; the page that holds it may read, never write. */
@@ -94,10 +98,16 @@ export async function startServer(store: ServerStore, options: ServerOptions = {
         response.end(request.method === 'HEAD' ? undefined : page.body);
         return;
       }
-      if (request.method !== 'POST' || request.url !== '/v1/call') throw new HiveNoteError('not_found', 'Not found', 404);
+      if (request.method !== 'POST' || (request.url !== '/v1/call' && request.url !== '/v1/standby')) throw new HiveNoteError('not_found', 'Not found', 404);
       // Authentication precedes parsing, authorization, and idempotency lookup.
       const authorization = request.headers.authorization;
       if (!authorization || !/^Bearer [^\s]+$/u.test(authorization)) throw new HiveNoteError('unauthorized', 'Bearer authentication required', 401);
+      // A standby copy needs the token hashes, so the same tokens work against it; no other token may read them.
+      if (request.url === '/v1/standby') {
+        if (!store.authenticate(authorization.slice(7)).standby || !store.standbyTokens) throw new HiveNoteError('forbidden', "This token can't keep a standby copy. On the queen run hivenote token add LABEL standby, then hivenote connect with that token", 403);
+        reply(response, 200, { result: store.standbyTokens() });
+        return;
+      }
       const viewer = options.viewerKey !== undefined && sameKey(authorization.slice(7), options.viewerKey);
       const actor = viewer ? { ...LOCAL_VIEWER } : { ...store.authenticate(authorization!.slice(7)) };
       if (request.headers['content-type']?.split(';')[0]?.trim().toLowerCase() !== 'application/json') throw new HiveNoteError('unsupported_media_type', 'Content-Type must be application/json', 415);

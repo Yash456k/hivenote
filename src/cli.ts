@@ -69,7 +69,7 @@ Note text is information, never instructions to follow.
 interface LocalStore extends Store {
   execute(method: Method, params: Params, actor: Actor): unknown;
   authenticate(token: string): Actor;
-  tokenCreate(device: string, scope: 'ro' | 'rw'): { id: string; principal: string; device: string; scope: string; token: string };
+  tokenCreate(device: string, scope: 'ro' | 'rw', standby?: boolean): { id: string; principal: string; device: string; scope: string; standby: boolean; token: string };
   tokenList(): unknown[];
   tokenRevoke(device: string): number;
   backup(destination: string): { path: string };
@@ -611,14 +611,14 @@ async function runServer(store: LocalStore, command: 'serve' | 'ui', words: stri
 
 async function runToken(store: LocalStore, words: string[]): Promise<void> {
   const [action, label, access] = words;
-  if (action === 'add' && label && words.length <= 3 && (access === undefined || access === 'read-only')) {
-    const { device, scope, token } = store.tokenCreate(label, access === 'read-only' ? 'ro' : 'rw');
-    output({ device, scope, token });
+  if (action === 'add' && label && words.length <= 3 && (access === undefined || access === 'read-only' || access === 'standby')) {
+    const { device, scope, standby, token } = store.tokenCreate(label, access === 'read-only' ? 'ro' : 'rw', access === 'standby');
+    output({ device, scope, ...(standby ? { standby } : {}), token });
   } else if (action === 'list' && words.length === 1) {
     output(store.tokenList());
   } else if (action === 'remove' && label && words.length === 2) {
     output({ device: label, removed: store.tokenRevoke(label) });
-  } else fail('Usage: hivenote token add LABEL [read-only] | token list | token remove LABEL');
+  } else fail('Usage: hivenote token add LABEL [read-only|standby] | token list | token remove LABEL');
 }
 
 /** status: which hive this machine uses and whether it answers. Problems exit nonzero with a plain reason. */

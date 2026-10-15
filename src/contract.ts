@@ -12,6 +12,8 @@ export interface Store { call(method: Method, params?: Params): Promise<unknown>
 export interface Actor {
   principal: string; device: string; scope: 'ro'|'rw'; verified: boolean;
   agent?: string; session?: string;
+  /** A standby token: it may also copy the hive's tokens, to keep a standby copy. */
+  standby?: boolean;
 }
 export interface Attribution { principal: string; device: string; verified: boolean; labels_verified: false; agent?: string; session?: string; }
 export interface Note {

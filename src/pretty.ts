@@ -158,12 +158,12 @@ export function pretty(command: string, value: unknown): string {
     case 'backup': return `Backed up to ${String(v.path)}`;
     case 'token': {
       if (Array.isArray(value)) {
-        const rows = value as { device: string; scope: string; revoked: number; created_at: string }[];
+        const rows = value as { device: string; scope: string; standby?: number; revoked: number; created_at: string }[];
         if (!rows.length) return 'No tokens yet. Add one: hivenote token add LABEL';
-        return rows.map(row => `${bold(row.device.padEnd(16))} ${row.scope === 'ro' ? 'read-only ' : 'read/write'}  ${dim(row.revoked ? 'removed' : `added ${ago(row.created_at)}`)}`).join('\n');
+        return rows.map(row => `${bold(row.device.padEnd(16))} ${row.scope === 'ro' ? 'read-only ' : row.standby ? 'standby   ' : 'read/write'}  ${dim(row.revoked ? 'removed' : `added ${ago(row.created_at)}`)}`).join('\n');
       }
       if (typeof v.token === 'string') {
-        return `Token for ${bold(String(v.device))} (${v.scope === 'ro' ? 'read-only' : 'read/write'}):\n\n  ${v.token}\n\n${dim('Copy it now; it is never shown again. On that machine run: hivenote connect URL')}`;
+        return `Token for ${bold(String(v.device))} (${v.scope === 'ro' ? 'read-only' : v.standby ? 'read/write, and may keep a standby copy' : 'read/write'}):\n\n  ${v.token}\n\n${dim(`Copy it now; it is never shown again. On that machine run: hivenote connect URL${v.standby ? ', then hivenote standby' : ''}`)}`;
       }
       return `Removed ${String(v.removed)} token${v.removed === 1 ? '' : 's'} for ${bold(String(v.device))}`;
     }
