@@ -39,12 +39,13 @@ const WHOLE = new Set<Method>(['replace', 'delete', 'restore', 'update_task']);
 /** The queen at this address answers, and is new enough. Nothing is sent otherwise. */
 export async function reachQueen(address: string): Promise<string> {
   const url = validateServerUrl(address).origin;
-  let health: { ok?: boolean; version?: string } | undefined;
+  let health: { ok?: boolean; version?: string; standby_for?: string } | undefined;
   try {
     health = await (await fetch(new URL('/health', url), { redirect: 'error', signal: AbortSignal.timeout(10000) })).json() as typeof health;
   } catch { throw new HiveNoteError('queen_unreachable', `Can't reach the queen at ${url}. Nothing was sent`, 503); }
   if (health?.ok !== true) throw new HiveNoteError('not_a_queen', `${url} answered, but it isn't a HiveNote queen. Nothing was sent`, 502);
-  if (Number(String(health.version).split('.')[0]) < 1) throw queenTooOld(health.version);
+  if (health.standby_for) throw new HiveNoteError('temporary_queen', `${url} is a temporary queen standing in for ${health.standby_for}, not the main queen. Nothing was sent. Give the main queen's address`, 409);
+  if (!(Number(String(health.version ?? '0').split('.')[0]) >= 1)) throw queenTooOld(health.version);
   return url;
 }
 

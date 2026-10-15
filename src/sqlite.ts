@@ -722,7 +722,7 @@ function attribution(actor: Actor): Attribution {
   const result: Attribution = {
     principal: text(actor.principal, 'principal', LIMITS.label),
     device: text(actor.device, 'device', LIMITS.label),
-    verified: actor.verified,
+    verified: actor.verified && !actor.relayed,
     labels_verified: false,
   };
   if (actor.agent !== undefined) result.agent = text(actor.agent, 'agent', LIMITS.label);
@@ -746,7 +746,7 @@ function createNote(p: Params, who: Attribution, now: string): Note {
     due_at: p.due_at === undefined ? null : due(p.due_at),
     claimed_by: null,
     claim_expires_at: null,
-    metadata: p.metadata === undefined ? {} : metadata(p.metadata),
+    metadata: p.metadata === undefined ? {} : (({ after: _after, ...rest }) => rest)(metadata(p.metadata)),
     created_at: now,
     updated_at: now,
     activity_at: now,
@@ -762,7 +762,7 @@ function applyReplace(note: Note, p: Params): void {
   if (p.name !== undefined) note.name = text(p.name, 'name', LIMITS.name);
   if (p.description !== undefined) note.description = text(p.description, 'description', LIMITS.description, true);
   if (p.content !== undefined) note.content = text(p.content, 'content', LIMITS.content, true);
-  if (p.metadata !== undefined) note.metadata = metadata(p.metadata);
+  if (p.metadata !== undefined) note.metadata = keepAfter(note, p.metadata);
   if (JSON.stringify([note.name, note.description, note.content, note.metadata]) === before) invalid('replace would not change anything');
 }
 
@@ -777,5 +777,15 @@ function applyTaskUpdate(note: Note, p: Params): void {
   if (!['status', 'due_at', 'metadata', 'after', 'not_after'].some(key => p[key] !== undefined)) invalid('update_task requires at least one field');
   if (p.status !== undefined) note.status = status(p.status);
   if (p.due_at !== undefined) note.due_at = due(p.due_at);
-  if (p.metadata !== undefined) note.metadata = metadata(p.metadata);
+  if (p.metadata !== undefined) note.metadata = keepAfter(note, p.metadata);
+}
+
+/**
+ * New metadata for a note, keeping the tasks it waits on: those change only through after and not_after,
+ * so a write that sets other metadata can't drop them, or make a loop the after check would refuse.
+ */
+function keepAfter(note: Note, value: unknown): Record<string, unknown> {
+  const { after: _given, ...rest } = metadata(value);
+  const after = note.metadata?.after;
+  return metadata(Array.isArray(after) && after.length ? { ...rest, after } : rest);
 }

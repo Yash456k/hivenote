@@ -160,11 +160,27 @@ export function pretty(command: string, value: unknown): string {
     }
     case 'standby': return `This machine keeps a standby copy of the hive at ${String(v.standby)}, current to change ${String(v.seq)}.\n${dim('It keeps following her until stopped. If she goes down: hivenote serve standby')}`;
     case 'merge': {
+      if (Array.isArray(v.conflicts)) {
+        const conflicts = v.conflicts as { note: string; by: string; why: string }[];
+        const lines = [`Merged into the queen at ${String(v.merged_into)}: ${String(v.applied)} new note${v.applied === 1 ? '' : 's'} added${v.already ? dim(` (${String(v.already)} she had already)`) : ''}`];
+        if (conflicts.length) lines.push('', bold(`Conflicts (${conflicts.length}):`), ...conflicts.map(item => `  ${item.note} ${dim(`by ${item.by}`)}: ${item.why}`));
+        return [...lines, ...(v.next ? ['', dim(String(v.next))] : [])].join('\n');
+      }
       const notMerged = v.not_merged as { change: string; by: string; why: string }[];
       const lines = [`Merged into the queen at ${String(v.merged_into)}: ${String(v.applied)} write${v.applied === 1 ? '' : 's'} applied${v.already ? dim(` (${String(v.already)} she had already)`) : ''}`];
       if (notMerged.length) lines.push('', bold(`Not merged (${notMerged.length}):`), ...notMerged.map(item => `  ${item.change} ${dim(`by ${item.by}`)}: ${item.why}`));
       return [...lines, ...(v.next ? ['', dim(String(v.next))] : [])].join('\n');
     }
+    case 'conflicts': {
+      const conflicts = v.conflicts as { note: string; kind: string; by: string; why: string; description?: string; content?: string; text?: string; on_the_queen?: { description: string; content: string } }[];
+      if (!conflicts.length) return 'No conflicts.';
+      return [...conflicts.map(item => [
+        `${bold(item.note)} ${dim(`${item.kind} by ${item.by}`)}`, `  ${item.why}`,
+        ...(item.text !== undefined ? [`  ${item.text}`] : [`  Kept here: ${item.description ?? ''}`, ...(item.content ? [dim(indent(item.content))] : [])]),
+        ...(item.on_the_queen ? [`  On the queen: ${item.on_the_queen.description}`, ...(item.on_the_queen.content ? [dim(indent(item.on_the_queen.content))] : [])] : []),
+      ].join('\n')), '', dim(String(v.settle))].join('\n\n');
+    }
+    case 'resolve': return v.how === 'drop' ? `Dropped the kept ${bold(String(v.note))}` : v.how === 'as' ? `Added ${bold(String(v.note))} (kept as ${String(v.was)})` : `Added the kept text to ${bold(String(v.note))} as a progress line`;
     case 'ui': return `Dashboard: ${String(v.dashboard)}`;
     case 'backup': return `Backed up to ${String(v.path)}`;
     case 'token': {
@@ -181,3 +197,5 @@ export function pretty(command: string, value: unknown): string {
   }
   return JSON.stringify(value, null, 2);
 }
+
+function indent(text: string): string { return text.split('\n').map(line => `    ${line}`).join('\n'); }

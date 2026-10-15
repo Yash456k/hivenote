@@ -24,6 +24,8 @@ test('a task waits on others: ready shows what can start, and the link survives 
   // Stored by id: renaming a task keeps every task that waits on it waiting on it.
   const store = new SqliteStore(db, actor());
   await store.call('replace', params({ note: 'build-api', name: 'build-backend' }));
+  // Other metadata can be set without dropping what it waits on.
+  await store.call('update_task', params({ note: 'deploy', metadata: { priority: 1 } }));
   store.close();
   assert.deepEqual((await hive('read', 'deploy')).notes[0].waits_on, ['build-backend', 'review-api']);
 

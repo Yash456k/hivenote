@@ -72,9 +72,11 @@ const SCHEMA = `
  * What takes a file from the version before to each version. Only additions: a file is upgraded, never recreated,
  * and nothing a user wrote is changed.
  */
-const MIGRATIONS: Record<number, string> = {
-  // 1.0: a token may be a standby token.
-  2: 'ALTER TABLE clients ADD COLUMN standby INTEGER NOT NULL DEFAULT 0;',
+const MIGRATIONS: Record<number, (db: DatabaseSync) => void> = {
+  // 1.0: a token may be a standby token. Skipped when the column is there already (a file put back to version 1 by hand).
+  2: db => {
+    if (!db.prepare("SELECT 1 FROM pragma_table_info('clients') WHERE name='standby'").get()) db.exec('ALTER TABLE clients ADD COLUMN standby INTEGER NOT NULL DEFAULT 0;');
+  },
 };
 
 /** Turn SQLite errors into safe HiveNote errors; never leak SQL text. */
@@ -151,7 +153,7 @@ export function openDatabase(path: string): DatabaseSync {
       if (version === SCHEMA_VERSION) return;
       // A file from an older HiveNote is copied as it is, then upgraded in this same transaction.
       keepCopy(path, `${path}.before-v${SCHEMA_VERSION}`);
-      for (let next = version + 1; next <= SCHEMA_VERSION; next++) db.exec(`${MIGRATIONS[next]!} PRAGMA user_version=${next};`);
+      for (let next = version + 1; next <= SCHEMA_VERSION; next++) { MIGRATIONS[next]!(db); db.exec(`PRAGMA user_version=${next};`); }
     });
   } catch (error) {
     db.close();
@@ -162,14 +164,19 @@ export function openDatabase(path: string): DatabaseSync {
 
 /**
  * A consistent copy of the file, private like it, made while the caller holds the write lock, so it is the file
- * as it was before the upgrade. One made by an earlier start is kept, not replaced.
+ * as it was before the upgrade. A file already at that path (an earlier upgrade's copy, or one cut short) is never
+ * replaced or trusted: this copy then goes beside it, with the time in its name.
  */
-function keepCopy(path: string, copy: string): void {
-  try {
-    closeSync(openSync(copy, 'wx', 0o600));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return;
-    throw error;
+function keepCopy(path: string, wanted: string): void {
+  let copy = wanted;
+  for (;;) {
+    try {
+      closeSync(openSync(copy, 'wx', 0o600));
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      copy = `${wanted}-${new Date().toISOString().replace(/[:.]/gu, '-')}-${Math.random().toString(36).slice(2, 6)}`;
+    }
   }
   const reader = new DatabaseSync(path, { readOnly: true });
   try {

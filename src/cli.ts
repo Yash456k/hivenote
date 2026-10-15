@@ -7,7 +7,7 @@ import type { Server } from 'node:http';
 import { byline, HiveNoteError, VERSION, type Actor, type Event, type Method, type Params, type Store } from './contract.js';
 import { HttpStore } from './client.js';
 import { configDirectory, defaultDbPath, loadConfig, readToken, resolveConfig, takeoverMs, type Config } from './config.js';
-import { isQueued, kept, reminder, type QueueStore } from './queue.js';
+import { conflictCount, isQueued, kept, reminder, type QueueStore } from './queue.js';
 import { assertSupportedNode, detectAgent, quietSqliteWarning } from './runtime.js';
 import { WAIT_DEFAULTS, changesSince, waitForAnyChange, waitForNote, type TaskStatus } from './wait.js';
 import { pretty } from './pretty.js';
@@ -18,7 +18,7 @@ import { lean, leanDetails, word } from './lean.js';
 const HELP = `hivenote: one shared notebook for your AI agents
 
 Notes
-  hivenote list [FOLDER/]                 every note: name and one-line description (a name like deploy/notes is in a folder)
+  hivenote list [FOLDER/]                 every note: name and one-line description (or those in one folder)
   hivenote read NAME...                   the full notes, with their latest progress
   hivenote search WORDS
   hivenote add NAME "description" "text"  a new note (text can be left out)
@@ -31,7 +31,7 @@ Notes
   hivenote restore NAME VERSION           undo: bring back an earlier version
 
 Tasks
-  hivenote task NAME "description"        a new task (--after OTHER,... for one that waits on others to be done)
+  hivenote task NAME "description"        a new task (--after OTHER,... when it waits on others)
   hivenote tasks                          the board: status, who, how long ago, what each waits on
   hivenote ready                          todo tasks with nothing left to wait on
   hivenote take                           take the next ready task, and see its text and progress
@@ -50,14 +50,16 @@ Machines
   hivenote ui                             open the dashboard for this machine's hive
   hivenote connect [URL]                  use the queen's hive from this machine
   hivenote disconnect                     go back to this machine's own hive
-  hivenote status                         which hive this machine uses, whether it answers, and writes kept here
+  hivenote status                         which hive this machine uses, and whether it answers
   hivenote token add LABEL [read-only]    let another machine in (token list, token remove LABEL)
   hivenote backup FILE | hivenote mcp
 
 When the queen is down
-  hivenote standby                        keep a copy of the queen's hive on this worker (token add LABEL standby)
+  hivenote standby                        keep a copy of the queen's hive here (needs a standby token)
   hivenote serve standby [HOST][:PORT]    serve that copy as a temporary queen while she is down
-  hivenote merge                          send the queen the writes kept here while she was away
+  hivenote merge                          send the queen the new notes kept here while she was away
+  hivenote conflicts                      kept notes the queen did not take, with their text and hers
+  hivenote resolve NAME as NEW-NAME       settle one: add it under another name (or append, or drop)
   hivenote merge URL                      when she is back, send her what was written on the temporary queen
 
 Any text can be - to read it from a file or typed input: hivenote replace notes - < notes.md
@@ -88,7 +90,7 @@ interface LocalStore extends Store {
  * A person at a terminal gets a readable view; agents, scripts and --json get JSON.
  * That JSON is lean, the parts an agent acts on, unless --full asks for the stored record.
  */
-const view: { human: boolean; full: boolean; command: string; since?: number; anyway: boolean; after?: string[]; writtenOut: boolean; kept: number } = { human: false, full: false, command: '', anyway: false, writtenOut: false, kept: 0 };
+const view: { human: boolean; full: boolean; command: string; since?: number; anyway: boolean; after?: string[]; writtenOut: boolean; kept: number; conflicts: number } = { human: false, full: false, command: '', anyway: false, writtenOut: false, kept: 0, conflicts: 0 };
 
 /** Said when text arrives with \n typed out: a shell passes those two characters on as they are. */
 function writtenOut(name: string): string {
@@ -96,13 +98,18 @@ function writtenOut(name: string): string {
   return `The text has \\n written out, and it was saved that way: as two characters, not as line breaks. For text of several lines, pass - as the text and send it on stdin: hivenote ${again} ${word(name)} - <<'EOF'`;
 }
 
-/** Said for a write made while the queen could not be reached. */
-const KEPT = "The queen can't be reached, so this write is kept on this machine. It reaches her only when the user runs hivenote merge";
+/** Said for a note made while the queen could not be reached. */
+const KEPT = "The queen can't be reached, so this new note is kept on this machine; don't add it again. It reaches her when hivenote merge runs";
 
-/** While writes are kept here, every answer says so once: a line on stderr for a person, a count for an agent. */
+/** While notes are kept or conflicts wait here, every answer says so once: a line on stderr for a person, counts for an agent. */
 function remind(): void {
-  if (view.kept) process.stderr.write(`hivenote: ${reminder(view.kept)}\n`);
+  if (view.kept || view.conflicts) process.stderr.write(`hivenote: ${reminder(view.kept, view.conflicts)}\n`);
 }
+/** The counts every answer on a worker carries while there are any. */
+function counts(): Record<string, number> {
+  return { ...(view.kept ? { kept: view.kept } : {}), ...(view.conflicts ? { conflicts: view.conflicts } : {}) };
+}
+function recount(): void { view.kept = kept(); view.conflicts = conflictCount(); }
 
 function output(value: unknown): void {
   if (isQueued(value)) {
@@ -118,7 +125,7 @@ function output(value: unknown): void {
   }
   let shown = view.full ? value : lean(view.command, value);
   if (view.writtenOut && !view.full) (shown as { note: string; heads_up?: string }).heads_up ??= writtenOut((shown as { note: string }).note);
-  if (view.kept && typeof shown === 'object' && shown !== null && !Array.isArray(shown)) shown = { ...shown, kept: view.kept };
+  if ((view.kept || view.conflicts) && typeof shown === 'object' && shown !== null && !Array.isArray(shown)) shown = { ...counts(), ...shown }; // conflicts and merge answer with the list itself
   process.stdout.write(JSON.stringify(shown) + '\n');
 }
 
@@ -163,7 +170,7 @@ function parse(argv: string[]): Words {
       (result.after ??= []).push(...after);
     } else if (word === '--json') result.json = true;
     else if (word === '--full') result.full = true;
-    else if (word === '--anyway' && (command === undefined || command === 'mark')) result.anyway = true;
+    else if (word === '--anyway' && (command === undefined || command === 'mark' || command === 'serve')) result.anyway = true;
     else if (given < 1 && (word === '--help' || word === '-h')) result.help = true;
     else if (given < 1 && (word === '--version' || word === '-v')) result.version = true;
     else result.words.push(word);
@@ -391,6 +398,17 @@ const NOTES: Record<string, { usage: string; min: number; max: number; run: Run 
       return shown(store, taken.note.name, taken);
     },
   },
+  conflicts: {
+    usage: 'conflicts', min: 0, max: 0,
+    run: async (_, store) => (await import('./queue.js')).listConflicts(store),
+  },
+  resolve: {
+    usage: 'resolve NAME as NEW-NAME | resolve NAME append | resolve NAME drop', min: 2, max: 3,
+    run: async ([note, how, newName], store) => {
+      if (!(how === 'as' && newName) && !((how === 'append' || how === 'drop') && newName === undefined)) fail('Usage: hivenote resolve NAME as NEW-NAME | resolve NAME append | resolve NAME drop');
+      return (await import('./queue.js')).resolveConflict(store, note!, how as 'as' | 'append' | 'drop', newName);
+    },
+  },
   after: {
     usage: 'after NAME OTHER... | after NAME not OTHER...', min: 2, max: 101,
     run: async ([note, ...rest], store) => {
@@ -453,13 +471,7 @@ const NOTES: Record<string, { usage: string; min: number; max: number; run: Run 
       const taking = status === 'doing' && !view.anyway;
       if (did !== undefined) {
         // Checked first, so a line is not left behind on something the mark is then refused for.
-        // Without the queen it can't be, and the line and the mark are kept to send later.
-        let found: { kind: string } | undefined;
-        try {
-          ({ notes: [found] } = await store.call('read', { names: [note!] }) as { notes: { kind: string }[] });
-        } catch (error) {
-          if (!(error instanceof HiveNoteError && error.code === 'transport_error')) throw error;
-        }
+        const { notes: [found] } = await store.call('read', { names: [note!] }) as { notes: { kind: string }[] };
         if (found && found.kind !== 'task') throw new HiveNoteError('validation_error', `'${note}' is a note, not a task, so it has no status to mark. Nothing was added`);
         // The progress line goes first, so whoever is waiting for the status finds it already there.
         // Not when taking: the line would be left on a task the hive then says is someone else's.
@@ -586,7 +598,7 @@ async function runServer(store: LocalStore, command: 'serve' | 'ui', words: stri
   let server: Server | undefined;
   for (const port of ports) {
     try {
-      server = await startServer(store, { host, port, ...(viewerKey ? { viewerKey } : {}) });
+      server = await startServer(store, { host, port, ...(viewerKey ? { viewerKey } : {}), ...(standby ? { standbyFor: standby } : {}) });
       break;
     } catch (error) {
       if (!(error instanceof HiveNoteError && error.code === 'port_in_use') || port === ports.at(-1)) throw error;
@@ -651,7 +663,7 @@ async function runStatus(config: Config): Promise<void> {
     return;
   }
   const url = config.url;
-  view.kept = kept();
+  recount();
   let health: { ok?: boolean; version?: string };
   try {
     const response = await fetch(new URL('/health', url), { redirect: 'error', signal: AbortSignal.timeout(10000) });
@@ -672,7 +684,7 @@ async function runStatus(config: Config): Promise<void> {
     throw error;
   }
   output({
-    hive: 'queen', url, reachable: true, token: 'accepted', notes: total, kept: view.kept,
+    hive: 'queen', url, reachable: true, token: 'accepted', notes: total, kept: view.kept, conflicts: view.conflicts,
     connection: await connection(config),
     queen_version: health.version ?? 'unknown', this_version: VERSION, round_trip_ms: Math.round(performance.now() - started),
   });
@@ -724,7 +736,7 @@ async function runOnThisMachine(command: string, words: string[], config: Config
 }
 
 /** standby, serve standby and merge: a copy of the queen's hive on a worker, served while she is down. */
-async function runStandby(command: string, words: string[], config: Config): Promise<void> {
+async function runStandby(command: string, words: string[], config: Config, anyway = false): Promise<void> {
   const standby = await import('./standby.js');
   if (command === 'standby') {
     if (words.length) fail('Usage: hivenote standby');
@@ -737,10 +749,13 @@ async function runStandby(command: string, words: string[], config: Config): Pro
     if (words.length) { output(await standby.merge(words[0]!, readToken(config))); return; }
     if (!config.url) throw new HiveNoteError('invalid_args', 'This machine is not connected to a queen, so it has no kept writes to send. On a temporary queen, give the main queen\'s address: hivenote merge URL');
     const { mergeKept } = await import('./queue.js');
-    try { output(await mergeKept(config.url, await reachQueen(config))); } finally { view.kept = kept(); }
+    try { output(await mergeKept(config.url, await reachQueen(config))); } finally { recount(); }
     return;
   }
+  // Two queens at once split the hive: while the main one answers, a copy is served only when asked to all the same.
+  if (!anyway) await standby.refuseWhileUp();
   const { queen } = await standby.takeOver();
+  standby.markServing();
   quietSqliteWarning();
   (await import('./database.js')).lockWait.ms = 200;
   const { url: _url, tokenFile: _tokenFile, ...rest } = config;
@@ -815,7 +830,8 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     if (config.url && plan.enabled) await helper.runHelper(config.url, readToken(config), plan.idleMs);
     return;
   }
-  if (command === 'standby' || command === 'merge' || (command === 'serve' && words[0] === 'standby')) { await runStandby(command, words, config); return; }
+  if (command === 'standby' || command === 'merge' || (command === 'serve' && words[0] === 'standby')) { await runStandby(command, words, config, anyway); return; }
+  if (anyway && command === 'serve') fail('--anyway goes with mark, or with serve standby');
   if (command === 'serve' || command === 'ui' || command === 'token' || command === 'backup') { await runOnThisMachine(command, words, config); return; }
 
   // hasOwn: a word like "constructor" is not a command just because every object has one.
@@ -840,7 +856,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     result = await spec.run(words, store);
   } finally {
     store.close?.();
-    if (config.url) view.kept = kept();
+    if (config.url) recount();
   }
   output(result);
 }
@@ -851,6 +867,6 @@ if (process.argv[1] && realpathSync(resolve(process.argv[1])) === fileURLToPath(
     const e = error instanceof HiveNoteError ? error : new HiveNoteError('internal_error', 'Operation failed', 500);
     process.exitCode = 1;
     if (view.human) { process.stderr.write(`hivenote: ${e.message}\n`); remind(); return; }
-    process.stderr.write(JSON.stringify({ error: { code: e.code, message: e.message, status: e.status, ...(e.details === undefined ? {} : { details: view.full ? e.details : leanDetails(e.details) }) }, ...(view.kept ? { kept: view.kept } : {}) }) + '\n');
+    process.stderr.write(JSON.stringify({ error: { code: e.code, message: e.message, status: e.status, ...(e.details === undefined ? {} : { details: view.full ? e.details : leanDetails(e.details) }) }, ...counts() }) + '\n');
   });
 }

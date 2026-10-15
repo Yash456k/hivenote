@@ -44,8 +44,15 @@ async function openCopy(options: { keepReceipts?: boolean } = {}): Promise<Sqlit
   return new SqliteStore(standbyPath(), undefined, options);
 }
 
-/** SQLite removes the file's journal when its last user closes it; one still there means the copy is being served. */
-function inUse(): boolean { return existsSync(`${standbyPath()}-wal`); }
+function pidPath(): string { return join(configDirectory(), 'standby.pid'); }
+/** serve standby says which process serves the copy; the copy is in use while that process lives. A crash leaves a file whose process is gone. */
+export function markServing(): void { writeFileSync(pidPath(), `${process.pid}\n`, { mode: 0o600 }); }
+function inUse(): boolean {
+  let pid: number;
+  try { pid = Number(readFileSync(pidPath(), 'utf8').trim()); } catch { return false; }
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
+  try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
+}
 
 /** Put the copy aside under a new name and start again; it is not deleted. */
 function setAside(say: (line: string) => void, why: string): void {
@@ -134,6 +141,15 @@ function stopOnSignal(stop: () => void): void {
   process.once('SIGTERM', exit);
 }
 
+/** Refuse to serve the copy while the main queen still answers: two queens at once split the hive. */
+export async function refuseWhileUp(): Promise<void> {
+  const state = readState();
+  if (!state || state.took_over !== undefined) return;
+  let up = false;
+  try { up = (await (await fetch(new URL('/health', state.queen), { redirect: 'error', signal: AbortSignal.timeout(3000) })).json() as { ok?: boolean }).ok === true; } catch { /* down, as expected */ }
+  if (up) throw new HiveNoteError('queen_is_up', `The queen at ${state.queen} still answers. Serving the copy now would make two queens, and the hive splits. If she is broken all the same: hivenote serve standby --anyway`, 409);
+}
+
 /** `hivenote serve standby`: the copy becomes a temporary queen. The queen's last change it had is recorded once. */
 export async function takeOver(): Promise<{ queen: string; seq: number }> {
   const state = readState();
@@ -174,12 +190,13 @@ export async function merge(address: string, token: string): Promise<Report> {
       note: { id: write.note.id },
       change: write.method === 'take' ? `take ${write.note.name}` : describe(write.method, write.params, write.note.name),
       by: byline(write.attribution),
-      labels: { agent: write.attribution.agent ?? write.attribution.device, ...(write.attribution.session ? { session: write.attribution.session } : {}) },
+      // Who made it, as a label: the main queen records it as unverified, not as this machine's own write.
+      labels: { agent: byline(write.attribution).slice(0, 256), ...(write.attribution.session ? { session: write.attribution.session } : {}) },
       // The main queen's changes to the note that the copy has were seen; those it does not know were made meanwhile.
       skip: copy.changesOf(write.note.id, tookOver),
       meanwhile: (event: Event) => !copy.knows(event.op_id),
     }));
-    const sent = await send(outgoing, labels => new HttpStore(url, token, { ...labels, quiet: true }), `hivenote merge ${url}`, () => {});
+    const sent = await send(outgoing, labels => new HttpStore(url, token, { ...labels, quiet: true, relayed: true }), `hivenote merge ${url}`, () => {});
     writeState({ ...state, merged: latest });
     const left = sent.not_merged.length ? ` What was not merged is still in this machine's copy: HIVENOTE_DB=${standbyPath()} hivenote read NAME` : '';
     return {

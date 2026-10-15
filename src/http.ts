@@ -15,6 +15,8 @@ export interface ServerOptions {
   host?: string; port?: number; dropResponseOnce?: boolean;
   /** `hivenote ui`: a key for this launch only; the page that holds it may read, never write. */
   viewerKey?: string;
+  /** serve standby: the main queen's address, said on /health so nothing mistakes this copy for her. */
+  standbyFor?: string;
 }
 const LIMIT = 1024 * 1024;
 
@@ -91,7 +93,7 @@ export async function startServer(store: ServerStore, options: ServerOptions = {
   const ui = loadUi();
   const server = http.createServer({ requestTimeout: 15000, headersTimeout: 10000, keepAliveTimeout: 5000, maxHeaderSize: 16384 }, (request, response) => {
     void (async () => {
-      if (request.method === 'GET' && request.url === '/health') { reply(response, 200, { ok: true, version: VERSION, queen: options.viewerKey === undefined }); return; }
+      if (request.method === 'GET' && request.url === '/health') { reply(response, 200, { ok: true, version: VERSION, queen: options.viewerKey === undefined, ...(options.standbyFor ? { standby_for: options.standbyFor } : {}) }); return; }
       const page = request.method === 'GET' || request.method === 'HEAD' ? ui.get((request.url ?? '').split('?')[0]!) : undefined;
       if (page) {
         response.writeHead(200, { 'content-type': page.type, 'cache-control': 'no-cache', 'content-security-policy': UI_POLICY, 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' });
@@ -126,6 +128,11 @@ export async function startServer(store: ServerStore, options: ServerOptions = {
         }
       }
       if (actor.scope !== 'rw' && MUTATIONS.has(input.method)) throw new HiveNoteError('forbidden', 'Token is read-only', 403);
+      // merge from a temporary queen passes on other machines' writes: they are kept as unverified, never as this token's machine.
+      if (request.headers['x-hivenote-relayed'] !== undefined) {
+        if (!actor.standby) throw new HiveNoteError('forbidden', 'Only a standby token passes on writes from a temporary queen', 403);
+        actor.relayed = true;
+      }
       // A waiting agent asks what changed and is answered when something does, not at its next look.
       const result = input.method === 'changes' && typeof params.hold === 'number'
         ? await held(() => store.execute('changes', params, actor) as { events: unknown[] }, params.hold, () => !response.destroyed && server.listening)

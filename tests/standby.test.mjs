@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { copyFileSync, existsSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -82,6 +82,10 @@ test('a standby copy serves as a temporary queen, and merge gives the main queen
   await main.call('create', params({ name: 'outage', description: 'Down at noon', content: 'Written on the main queen' }));
   const before = main.changeCount().latest;
 
+  // Its own address is refused: merging into the temporary queen would leave the main queen without the writes.
+  const self = await run(process.execPath, [cli, 'merge', tempUrl], { env: msi });
+  assert.equal(JSON.parse(self.stderr.trim().split('\n').at(-1)).error.code, 'temporary_queen');
+
   const merge = async () => {
     const answer = await run(process.execPath, [cli, 'merge', mainUrl], { env: msi });
     assert.equal(answer.code, 0, answer.stderr);
@@ -99,6 +103,8 @@ test('a standby copy serves as a temporary queen, and merge gives the main queen
   assert.equal(buildApi.status, 'done');
   assert.equal(contract.content, 'POST /bookings, GET /bookings');
   assert.equal(deploy.last_attribution.principal, 'test-user');
+  // Passed on through msi's token, but made by the laptop: kept as the laptop's, unverified, never as msi's own.
+  assert.deepEqual([buildApi.last_attribution.agent, buildApi.last_attribution.verified], ['builder@laptop', false]);
   assert.equal(outage.content, 'Written on the main queen');
   const progress = (await main.call('history', { note: 'build-api' })).events.filter(event => event.kind === 'append').map(event => event.body);
   assert.deepEqual(progress, ['Schema is in', 'Endpoints done']);
@@ -119,13 +125,17 @@ test('a hive made by 0.5.0 opens, keeps its notes and tokens, and is copied firs
   const dir = await sandbox(t, 'v05');
   const path = join(dir, 'data.db');
   copyFileSync(join(root, 'tests/fixtures/hive-0.5.0.db'), path);
+  // A file left at the copy's name (an earlier copy cut short) is neither trusted nor replaced.
+  writeFileSync(`${path}.before-v2`, 'cut short');
   const store = new SqliteStore(path, actor());
   t.after(() => store.close());
   assert.deepEqual((await store.call('list', {})).notes.map(note => note.name).sort(), ['build-api', 'deploy/notes']);
   assert.deepEqual(store.tokenList().map(row => [row.device, row.scope, row.standby]), [['laptop', 'rw', 0], ['dashboard', 'ro', 0]]);
   assert.equal((await store.call('history', { note: 'plan' })).total, 2);
   assert.equal(store.tokenCreate('msi', 'rw', true).standby, true);
-  const copy = new DatabaseSync(`${path}.before-v2`, { readOnly: true });
+  assert.equal(readFileSync(`${path}.before-v2`, 'utf8'), 'cut short');
+  const copyPath = readdirSync(dir).find(file => file.startsWith('data.db.before-v2-'));
+  const copy = new DatabaseSync(join(dir, copyPath), { readOnly: true });
   assert.equal(copy.prepare('PRAGMA user_version').get().user_version, 1);
   assert.equal(copy.prepare('SELECT count(*) AS n FROM events').get().n, 6);
   copy.close();

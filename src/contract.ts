@@ -14,6 +14,8 @@ export interface Actor {
   agent?: string; session?: string;
   /** A standby token: it may also copy the hive's tokens, to keep a standby copy. */
   standby?: boolean;
+  /** A write a temporary queen's merge passes on for someone else: recorded as unverified, since the token is not theirs. */
+  relayed?: boolean;
 }
 export interface Attribution { principal: string; device: string; verified: boolean; labels_verified: false; agent?: string; session?: string; }
 export interface Note {
