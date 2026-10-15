@@ -121,7 +121,7 @@ hivenote connect                        # asks for the queen's URL (http://ITS-A
 hivenote status                         # checks the queen answers and the token works
 ```
 
-If the queen can't be reached, a worker keeps its writes and sends them, in order, the next time a command reaches her. Taking a task and reading still need her, and say so.
+If the queen can't be reached, a worker keeps its writes. Nothing is sent on its own: every command says how many are kept, and when she is back you send them with `hivenote merge`. Taking a task and reading still need her, and say so.
 
 If the machines aren't on the same network, the queen can open a tunnel to the internet herself:
 
@@ -155,7 +155,7 @@ When the main queen is back, one command on msi sends her what was written in th
 hivenote merge http://QUEEN-ADDRESS:7391
 ```
 
-Nothing is made twice, even if `merge` runs again, and nothing on the main queen is overwritten: where she changed the same thing meanwhile, such as a task taken on both, `merge` lists it for you to settle.
+Nothing is made twice, even if `merge` runs again, and nothing on the main queen is overwritten: where she changed the same thing meanwhile, such as a task taken on both, `merge` lists it for you to settle. `hivenote merge` with no address does the same for the writes a worker kept, and answers the same way.
 
 ### Updating
 
