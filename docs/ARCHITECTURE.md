@@ -25,7 +25,7 @@ dashboard ────┘ (ui/, reads through HTTP)
 | `tunnel.ts` | `serve public`: finding or downloading `cloudflared`, running it, and starting it again if it stops |
 | `helper.ts` | The connection helper on a worker: a background process that keeps one connection to the queen open, and the commands' side of talking to it |
 | `connect.ts`, `config.ts` | Saving which queen to use, and the token file |
-| `queue.ts` | On a worker: keeping writes made while the queen can't be reached, and sending them in order when she can |
+| `queue.ts` | On a worker: keeping new notes made while the queen can't be reached until `hivenote merge` sends them, and the conflicts merge leaves for `resolve` |
 | `standby.ts` | On a worker: keeping a standby copy of the queen's hive, serving it as a temporary queen, and merging what was written on it |
 | `wait.ts` | Waiting for a note to change or a task to reach a status |
 | `mcp.ts` | The MCP tools |
@@ -48,4 +48,4 @@ Writes take the write lock up front, check and change everything inside one tran
 - A task's status, who changed it last and when, and the tasks it waits on are the whole coordination model. `take` and the check in `mark doing` are made inside the write, on the queen, so two agents can't both be given one task.
 - Workers never load SQLite, except to keep or serve a standby copy, and normal commands never load the MCP SDK.
 - The connection helper is the only thing that runs between commands, and only on a worker. Nothing depends on it: every command works the same without it, just slower.
-- Writes kept while the queen is away are a file, not a process: the next command that reaches her sends them. Their `op_id`s are what make sending one again safe.
+- Only new notes wait for the queen; every other write is refused while she is away, so nothing is replayed over what others did meanwhile. Kept notes are a file, not a process: only `hivenote merge` sends them, and their `op_id`s make sending one again safe.
