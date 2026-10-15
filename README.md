@@ -29,7 +29,7 @@ If you run more than one agent, they usually share work through a notes file in 
 - **It stays fast as the notes grow.** At 10,000 entries it wrote 4 times faster than the official MCP memory server (on an empty store the memory server was faster).
 - **It works across tools and machines**, and on one machine it is a single file with no server and no network needed.
 
-It isn't worth it for one agent in one repo, where a `CLAUDE.md` does the job. If you want deep task trees kept inside the repo, [Beads](https://github.com/gastownhall/beads) does more with tasks.
+It probably isn't worth it if you run a single agent on a single repo in one place. Tasks are kept minimal on purpose: a status, who has it, and its progress, not a planner for large dependency graphs.
 
 These were measured on one 4-vCPU server; the setup, every number and a script to rerun them are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
