@@ -18,6 +18,21 @@ I built HiveNote because I kept copy-pasting between my own agents. I use Claude
 
 Any agent that can run a shell command can use it, whichever tool it runs in and whichever machine it is on, and when one agent finishes a task, the one waiting for it carries on.
 
+## Why use it
+
+If you run more than one agent, they usually share work through a notes file in the repo, GitHub issues, or you copying between them. HiveNote does that job better on the things that go wrong:
+
+- **The waiting agent carries on in about 0.1 s** over the internet. Through notes in a GitHub repo pulled every 15 seconds, it found out after about 12 s.
+- **Two agents never take the same task.** 0 double claims in 100,000 attempts. When agents claimed at the same moment, GitHub Issues let several take 10 of 10 tasks, and Beads syncing two machines did the same.
+- **Nothing is lost when something crashes.** With the server killed by `kill -9` 50 times mid-write, 0 of 17,887 acknowledged writes were lost or duplicated, and a write sent again after a dropped connection is applied once.
+- **Agents read only what they need.** Finding the 3 notes it needs costs 8 to 10 times fewer tokens than reading one shared notes file.
+- **It stays fast as the notes grow.** At 10,000 entries it wrote 4 times faster than the official MCP memory server (on an empty store the memory server was faster).
+- **It works across tools and machines**, and on one machine it is a single file with no server and no network needed.
+
+It isn't worth it for one agent in one repo, where a `CLAUDE.md` does the job. If you want deep task trees kept inside the repo, [Beads](https://github.com/gastownhall/beads) does more with tasks.
+
+These were measured on one 4-vCPU server; the setup, every number and a script to rerun them are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+
 ## How it works
 
 Every note has a name and a one-line description, so an agent lists the hive, opens only the notes that matter for its task, and updates them when it learns something new. It's the same way agents already pick skills. Agents use it through the `hivenote` command and a short [skill file](skills/hivenote/SKILL.md) that teaches them when to read and save. Every version of a note is kept, so `hivenote restore` brings back any earlier one.
@@ -65,18 +80,6 @@ On one machine there is nothing to run: the hive is a single SQLite file on your
 | `hivenote wait NAME done` | Block until another agent finishes it (`wait NAME` until it is added or changes, `wait` until anything does) |
 
 Agents get short JSON with the parts they act on (`--full` for the whole stored record); when you type a command yourself, you get a readable view. `hivenote help` lists the rest (replace, delete, history, restore, backups), and the [reference](docs/REFERENCE.md) covers all of it.
-
-## How it compares
-
-Measured on one 4-vCPU server; the setup, every number and a script to rerun them are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
-
-| | |
-|---|---|
-| Handing work to a waiting agent | about 0.1 s over the internet, against about 12 s through shared notes in a GitHub repo pulled every 15 s |
-| Two agents taking the same task | never both: 0 double claims in 100,000 attempts. When agents claimed at the same moment, GitHub Issues let several take 10 of 10 tasks, and Beads syncing two machines did the same |
-| The server killed mid-write | 50 times with `kill -9`: 0 of 17,887 acknowledged writes lost or duplicated |
-| Memory that keeps growing | 4 times faster than the official MCP memory server at 10,000 entries (the memory server was faster on an empty store) |
-| Finding the 3 notes an agent needs | 8 to 10 times fewer tokens than reading one shared notes file |
 
 ## Run it yourself
 
