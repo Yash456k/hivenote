@@ -7,6 +7,7 @@ import type { Server } from 'node:http';
 import { byline, HiveNoteError, VERSION, type Actor, type Event, type Method, type Params, type Store } from './contract.js';
 import { HttpStore } from './client.js';
 import { configDirectory, defaultDbPath, loadConfig, readToken, resolveConfig, takeoverMs, type Config } from './config.js';
+import { isQueued, waiting, type QueueStore } from './queue.js';
 import { assertSupportedNode, detectAgent, quietSqliteWarning } from './runtime.js';
 import { WAIT_DEFAULTS, changesSince, waitForAnyChange, waitForNote, type TaskStatus } from './wait.js';
 import { pretty } from './pretty.js';
@@ -49,7 +50,7 @@ Machines
   hivenote ui                             open the dashboard for this machine's hive
   hivenote connect [URL]                  use the queen's hive from this machine
   hivenote disconnect                     go back to this machine's own hive
-  hivenote status                         which hive this machine uses, and whether it answers
+  hivenote status                         which hive this machine uses, whether it answers, and writes waiting for it
   hivenote token add LABEL [read-only]    let another machine in (token list, token remove LABEL)
   hivenote backup FILE | hivenote mcp
 
@@ -89,7 +90,16 @@ function writtenOut(name: string): string {
   return `The text has \\n written out, and it was saved that way: as two characters, not as line breaks. For text of several lines, pass - as the text and send it on stdin: hivenote ${again} ${word(name)} - <<'EOF'`;
 }
 
+/** Said for a write made while the queen could not be reached. */
+const KEPT = "The queen can't be reached. This write is kept on this machine and sent, in order, by the next hivenote command that reaches her";
+
 function output(value: unknown): void {
+  if (isQueued(value)) {
+    const { note, waiting: count } = value.queued;
+    if (view.human) process.stdout.write(`Kept here to send later: the queen can't be reached (${count} write${count === 1 ? '' : 's'} waiting).\n`);
+    else process.stdout.write(JSON.stringify({ ok: 'queued', note, waiting: count, heads_up: KEPT }) + '\n');
+    return;
+  }
   if (view.human) {
     process.stdout.write(pretty(view.command, value) + '\n');
     if (view.writtenOut) process.stderr.write(`hivenote: ${writtenOut((value as { note: { name: string } }).note.name)}\n`);
@@ -223,13 +233,22 @@ async function openLocalStore(config: Config): Promise<LocalStore> {
   return new SqliteStore(config.db ?? defaultDbPath(), actor, takeover === undefined ? {} : { takeoverMs: takeover });
 }
 
+/**
+ * The queen's hive, from a worker. Writes made while she can't be reached are kept and sent later.
+ * Each command is a new process; the helper holds the connection they share.
+ */
+async function queenStore(config: Config): Promise<QueueStore> {
+  const token = readToken(config);
+  const helper = await import('./helper.js');
+  const reach = (labels: { agent?: string; session?: string }): Store => (helper.helperPlan(config.helper).enabled ? new helper.HelperStore(config.url!, token, labels) : new HttpStore(config.url!, token, labels));
+  const labels = config.agent ? { agent: config.agent } : {};
+  const { QueueStore } = await import('./queue.js');
+  return new QueueStore(reach(labels), reach, labels, line => { process.stderr.write(`hivenote: ${line}\n`); });
+}
+
 /** The queen's hive when connected; otherwise the file on this machine. */
 async function openStore(config: Config): Promise<Store> {
-  if (!config.url) return openLocalStore(config);
-  const labels = config.agent ? { agent: config.agent } : {};
-  // Each command is a new process; the helper holds the connection they share.
-  const helper = await import('./helper.js');
-  return helper.helperPlan(config.helper).enabled ? new helper.HelperStore(config.url, readToken(config), labels) : new HttpStore(config.url, readToken(config), labels);
+  return config.url ? queenStore(config) : openLocalStore(config);
 }
 
 // ---------- Notes and tasks ----------
@@ -421,7 +440,13 @@ const NOTES: Record<string, { usage: string; min: number; max: number; run: Run 
       const taking = status === 'doing' && !view.anyway;
       if (did !== undefined) {
         // Checked first, so a line is not left behind on something the mark is then refused for.
-        const { notes: [found] } = await store.call('read', { names: [note!] }) as { notes: { kind: string }[] };
+        // Without the queen it can't be, and the line and the mark are kept to send later.
+        let found: { kind: string } | undefined;
+        try {
+          ({ notes: [found] } = await store.call('read', { names: [note!] }) as { notes: { kind: string }[] });
+        } catch (error) {
+          if (!(error instanceof HiveNoteError && error.code === 'transport_error')) throw error;
+        }
         if (found && found.kind !== 'task') throw new HiveNoteError('validation_error', `'${note}' is a note, not a task, so it has no status to mark. Nothing was added`);
         // The progress line goes first, so whoever is waiting for the status finds it already there.
         // Not when taking: the line would be left on a task the hive then says is someone else's.
@@ -614,9 +639,13 @@ async function runStatus(config: Config): Promise<void> {
     const response = await fetch(new URL('/health', url), { redirect: 'error', signal: AbortSignal.timeout(10000) });
     health = await response.json() as typeof health;
   } catch {
-    throw new HiveNoteError('queen_unreachable', `Can't reach the queen at ${url}. Check that it is running and that this machine can reach it.`, 503);
+    const kept = waiting();
+    const queue = kept ? ` ${kept} write${kept === 1 ? '' : 's'} made here ${kept === 1 ? 'is' : 'are'} waiting to be sent to her.` : '';
+    throw new HiveNoteError('queen_unreachable', `Can't reach the queen at ${url}. Check that it is running and that this machine can reach it.${queue}`, 503);
   }
   if (health?.ok !== true) throw new HiveNoteError('not_a_queen', `${url} answered, but it isn't a HiveNote queen.`, 502);
+  // Reaching the queen is when the writes kept here go.
+  try { await (await queenStore(config)).flush(); } catch { /* still kept; counted below */ }
   const store = new HttpStore(url, readToken(config), { retries: 0 });
   const started = performance.now();
   let total: number;
@@ -629,7 +658,7 @@ async function runStatus(config: Config): Promise<void> {
     throw error;
   }
   output({
-    hive: 'queen', url, reachable: true, token: 'accepted', notes: total,
+    hive: 'queen', url, reachable: true, token: 'accepted', notes: total, queued: waiting(),
     connection: await connection(config),
     queen_version: health.version ?? 'unknown', this_version: VERSION, round_trip_ms: Math.round(performance.now() - started),
   });
