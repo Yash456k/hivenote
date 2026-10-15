@@ -6,7 +6,7 @@ import { SqliteStore } from '../dist/sqlite.js';
 import { startServer } from '../dist/http.js';
 import { actor, cli, closeServer, params, run, sandbox } from './helpers.mjs';
 
-test('writes made while the queen is away are kept, and sent once, in order, when she is back', { timeout: 60_000 }, async t => {
+test('writes made while the queen is away are kept, and sent only by merge, once, in order', { timeout: 60_000 }, async t => {
   const dir = await sandbox(t, 'offline');
   const store = new SqliteStore(join(dir, 'queen.db'), actor());
   t.after(() => store.close());
@@ -15,6 +15,7 @@ test('writes made while the queen is away are kept, and sent once, in order, whe
   const port = server.address().port;
   t.after(() => closeServer(server));
   await store.call('create', params({ name: 'build-api', description: 'Build the API', content: 'Three endpoints', kind: 'task' }));
+  await store.call('create', params({ name: 'deploy', description: 'Ship it', content: '', kind: 'task' }));
   const env = { HIVENOTE_URL: `http://127.0.0.1:${port}`, HIVENOTE_TOKEN: token, HIVENOTE_HOME: join(dir, 'worker') };
   const hive = (...words) => run(process.execPath, [cli, '--agent', 'builder', ...words], { env });
 
@@ -23,31 +24,51 @@ test('writes made while the queen is away are kept, and sent once, in order, whe
     await hive('append', 'build-api', 'Schema is in'),
     await hive('mark', 'build-api', 'done', 'All three work'),
     await hive('add', 'api/contract', 'What the API promises', 'POST /bookings'),
-    await hive('edit', 'build-api', 'text that is not there', 'anything'),
+    await hive('mark', 'deploy', 'done'),
+    await hive('edit', 'deploy', 'old text', 'new text'),
   ];
   assert.ok(kept.every(answer => answer.code === 0), kept.map(answer => answer.stderr).join('\n'));
-  assert.deepEqual(kept.map(answer => JSON.parse(answer.stdout)).map(({ ok, waiting }) => [ok, waiting]), [['queued', 1], ['queued', 3], ['queued', 4], ['queued', 5]]);
-  // Taking a task and reading need the queen, and say so.
+  assert.deepEqual(kept.map(answer => JSON.parse(answer.stdout)).map(({ ok, kept }) => [ok, kept]), [['queued', 1], ['queued', 3], ['queued', 4], ['queued', 5], ['queued', 6]]);
+  // Taking a task and reading need the queen, and say how many writes are kept.
   for (const words of [['mark', 'build-api', 'doing'], ['take'], ['read', 'build-api']]) {
     const answer = await hive(...words);
     assert.notEqual(answer.code, 0);
-    assert.match(JSON.parse(answer.stderr).error.message, /5 writes made here are waiting to be sent to the queen/u, words.join(' '));
+    assert.equal(JSON.parse(answer.stderr).kept, 6, words.join(' '));
   }
-  assert.match((await hive('status')).stderr, /5 writes made here are waiting/u);
 
-  // Back, and the first answer is lost on the way: the worker sends that write again, and it is still made once.
-  server = await startServer(store, { port, dropResponseOnce: true });
+  // Back, and nothing is sent until merge: commands work, and each says what is kept.
+  server = await startServer(store, { port });
   const back = await hive('list');
   assert.equal(back.code, 0, back.stderr);
-  assert.match(back.stderr, /refused when it was sent, so it is dropped: edit build-api\. The old text is not in the note/u);
-  assert.deepEqual(JSON.parse(back.stdout).notes.map(note => note.name).sort(), ['api/contract', 'build-api']);
+  assert.equal(JSON.parse(back.stdout).kept, 6);
+  assert.equal(JSON.parse((await hive('status')).stdout).kept, 6);
+  assert.equal((await store.call('list', {})).total, 2);
+  assert.equal((await store.call('history', { note: 'build-api' })).total, 1);
+  // Meanwhile someone on the queen takes deploy: the kept mark must not overwrite that.
+  await store.call('update_task', params({ note: 'deploy', status: 'doing' }));
+
+  const merge = async () => {
+    const answer = await hive('merge');
+    assert.equal(answer.code, 0, answer.stderr);
+    return JSON.parse(answer.stdout);
+  };
+  const first = await merge();
+  assert.deepEqual([first.applied, first.already], [4, 0]);
+  assert.deepEqual(first.not_merged.map(item => [item.change, item.by]), [['mark deploy done', 'builder'], ['edit deploy', 'builder']]);
+  assert.match(first.not_merged[0].why, /changed it on the queen meanwhile/u);
+  assert.match(first.not_merged[1].why, /earlier write to it made here was not merged/u);
+  assert.equal(first.kept, undefined);
   const history = (await store.call('history', { note: 'build-api' })).events.map(event => [event.kind, event.body ?? event.snapshot.status, event.attribution.agent]);
   assert.deepEqual(history, [['create', 'todo', undefined], ['append', 'Schema is in', 'builder'], ['append', 'All three work', 'builder'], ['update_task', 'done', 'builder']]);
+  assert.equal((await store.call('read', { names: ['deploy'] })).notes[0].status, 'doing');
+  assert.equal(existsSync(join(env.HIVENOTE_HOME, 'not-merged.jsonl')), true);
 
-  // Sent once: nothing is waiting, the next command sends nothing again and reports nothing again.
-  assert.equal(existsSync(join(env.HIVENOTE_HOME, 'queue.jsonl')), false);
+  // Again: nothing is kept, so nothing is sent twice.
+  const latest = store.changeCount().latest;
+  const second = await merge();
+  assert.deepEqual([second.applied, second.already, second.not_merged.length], [0, 0, 0]);
+  assert.equal(store.changeCount().latest, latest);
   const status = await hive('status');
-  assert.equal(JSON.parse(status.stdout).queued, 0);
+  assert.equal(JSON.parse(status.stdout).kept, 0);
   assert.equal(status.stderr, '');
-  assert.equal((await store.call('history', { note: 'build-api' })).total, 4);
 });

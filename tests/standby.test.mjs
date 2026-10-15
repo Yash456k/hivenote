@@ -90,7 +90,7 @@ test('a standby copy serves as a temporary queen, and merge gives the main queen
   const first = await merge();
   assert.deepEqual([first.applied, first.already], [3, 0]);
   assert.deepEqual(first.not_merged.map(item => [item.change, item.by]), [['take deploy', 'builder@laptop'], ['add outage', 'builder@laptop']]);
-  assert.match(first.not_merged[0].why, /changed it on the main queen meanwhile/u);
+  assert.match(first.not_merged[0].why, /changed it on the queen meanwhile/u);
   assert.match(first.not_merged[1].why, /'outage' already exists/u);
   assert.match(first.next, new RegExp(`hivenote connect ${mainUrl}`, 'u'));
 

@@ -1,8 +1,9 @@
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { age, byline, HiveNoteError, type Event, type Method, type Note, type Params } from './contract.js';
-import { HttpStore, queenTooOld, validateServerUrl } from './client.js';
+import { byline, HiveNoteError, type Event, type Method, type Note, type Params } from './contract.js';
+import { HttpStore, queenTooOld } from './client.js';
+import { describe, reachQueen, send, type Report } from './merge.js';
 import { configDirectory } from './config.js';
 import { keepAliveFetch } from './helper.js';
 import { assertSupportedNode, quietSqliteWarning } from './runtime.js';
@@ -157,61 +158,32 @@ export async function temporaryQueen(): Promise<{ hive: 'temporary queen'; queen
   } finally { copy.close(); }
 }
 
-/** One change that merge did not send, and why. */
-export interface NotMerged { change: string; by: string; why: string }
-
-/** Changes that replace what a note says or its status; they are sent only if the main queen left the note alone meanwhile. */
-const WHOLE = new Set<Method>(['replace', 'delete', 'restore', 'update_task']);
-
 /** `hivenote merge MAIN`: send the writes made on the temporary queen to the main queen, oldest first. */
-export async function merge(address: string, token: string): Promise<{ merged_into: string; applied: number; already: number; not_merged: NotMerged[]; next: string }> {
+export async function merge(address: string, token: string): Promise<Report> {
   const state = readState();
-  if (state?.took_over === undefined || !existsSync(standbyPath())) throw new HiveNoteError('no_standby', 'This machine has not served as a temporary queen, so there is nothing to merge', 404);
-  const url = validateServerUrl(address).origin;
-  let health: { ok?: boolean; version?: string } | undefined;
-  try {
-    health = await (await fetch(new URL('/health', url), { redirect: 'error', signal: AbortSignal.timeout(10000) })).json() as typeof health;
-  } catch { throw new HiveNoteError('queen_unreachable', `Can't reach the main queen at ${url}. Nothing was sent`, 503); }
-  if (health?.ok !== true) throw new HiveNoteError('not_a_queen', `${url} answered, but it isn't a HiveNote queen. Nothing was sent`, 502);
-  if (Number(String(health.version).split('.')[0]) < 1) throw queenTooOld(health.version);
-
-  const main = (labels: { agent?: string; session?: string } = {}): HttpStore => new HttpStore(url, token, { ...labels, quiet: true });
-  const reader = main();
+  if (state?.took_over === undefined || !existsSync(standbyPath())) {
+    throw new HiveNoteError('no_standby', 'This machine has not served as a temporary queen, so there is nothing to merge. To send the writes kept on this machine, run hivenote merge with no address', 404);
+  }
+  const tookOver = state.took_over;
+  const url = await reachQueen(address);
   const copy = await openCopy();
   try {
     const { latest } = copy.changeCount();
-    let applied = 0, already = 0;
-    const notMerged: NotMerged[] = [];
-    // A note with a change that could not be merged keeps the rest of its changes here too, so they are not applied out of order.
-    const held = new Set<string>();
-    for (const write of copy.writesMadeHere()) {
-      const { method, params } = forMain(write);
-      const id = write.note.id;
-      const refuse = (why: string): void => { notMerged.push({ change: describe(write), by: byline(write.attribution), why }); held.add(id); };
-      if (held.has(id)) { refuse('an earlier change to it made here was not merged'); continue; }
-      try {
-        // What the main queen has done to the note since the copy was made.
-        const theirs = await history(reader, id, copy.changesOf(id, state.took_over));
-        if (theirs.some(event => event.op_id === params.op_id)) { already++; continue; }
-        const other = WHOLE.has(method) ? theirs.find(event => event.kind !== 'append' && !copy.knows(event.op_id)) : undefined;
-        if (other) { refuse(`${byline(other.attribution)} changed it on the main queen meanwhile, ${age(other.timestamp)} ago`); continue; }
-        const { agent, device, session } = write.attribution;
-        await main({ agent: agent ?? device, ...(session ? { session } : {}) }).call(method, params);
-        applied++;
-      } catch (error) {
-        if (!(error instanceof HiveNoteError)) throw error;
-        // The main queen has it already, and no longer keeps the answer she gave.
-        if (error.code === 'op_id_conflict') { already++; continue; }
-        if (error.code === 'transport_error' || error.code === 'busy' || error.status === 401) {
-          throw new HiveNoteError(error.code, `${error.message}. ${changes(applied)} ${applied === 1 ? 'was' : 'were'} merged before that. Run hivenote merge ${url} again; nothing is applied twice`, error.status);
-        }
-        refuse(error.message);
-      }
-    }
+    const outgoing = copy.writesMadeHere().map(write => ({
+      ...forMain(write),
+      note: { id: write.note.id },
+      change: write.method === 'take' ? `take ${write.note.name}` : describe(write.method, write.params, write.note.name),
+      by: byline(write.attribution),
+      labels: { agent: write.attribution.agent ?? write.attribution.device, ...(write.attribution.session ? { session: write.attribution.session } : {}) },
+      // The main queen's changes to the note that the copy has were seen; those it does not know were made meanwhile.
+      skip: copy.changesOf(write.note.id, tookOver),
+      meanwhile: (event: Event) => !copy.knows(event.op_id),
+    }));
+    const sent = await send(outgoing, labels => new HttpStore(url, token, { ...labels, quiet: true }), `hivenote merge ${url}`, () => {});
     writeState({ ...state, merged: latest });
-    const left = notMerged.length ? ` What was not merged is still in this machine's copy: HIVENOTE_DB=${standbyPath()} hivenote read NAME` : '';
+    const left = sent.not_merged.length ? ` What was not merged is still in this machine's copy: HIVENOTE_DB=${standbyPath()} hivenote read NAME` : '';
     return {
-      merged_into: url, applied, already, not_merged: notMerged,
+      merged_into: url, ...sent,
       next: `Stop hivenote serve standby here. On every worker, run hivenote connect ${url} and press Enter to keep its token.${left}`,
     };
   } finally { copy.close(); }
@@ -225,32 +197,6 @@ function forMain({ method, params, note }: { method: Method; params: Params; not
   // A claim is checked against the main queen's history instead, before the write is sent.
   const { note: _name, claim: _claim, ...rest } = params;
   return { method, params: { ...rest, id: note.id } };
-}
-
-/** The main queen's changes to a note after its first `skip`, the ones the copy has; none when she has no such note. */
-async function history(queen: HttpStore, id: string, skip: number): Promise<Event[]> {
-  const events: Event[] = [];
-  for (let offset = skip; ;) {
-    let page: { events: Event[]; has_more: boolean };
-    try {
-      page = await queen.call('history', { id, offset, limit: 100 }) as typeof page;
-    } catch (error) {
-      if (error instanceof HiveNoteError && error.code === 'not_found') return events;
-      throw error;
-    }
-    events.push(...page.events);
-    if (!page.has_more || !page.events.length) return events;
-    offset += page.events.length;
-  }
-}
-
-/** A write in a few words, as the command that made it. */
-function describe({ method, params, note }: { method: Method; params: Params; note: Note }): string {
-  if (method === 'create') return `${note.kind === 'task' ? 'task' : 'add'} ${note.name}`;
-  if (method === 'take') return `take ${note.name}`;
-  if (method === 'update_task') return typeof params.status === 'string' ? `mark ${note.name} ${params.status}` : `after ${note.name}`;
-  if (method === 'replace' && params.content === undefined && params.description !== undefined) return `describe ${note.name}`;
-  return `${method} ${note.name}`;
 }
 
 const changes = (n: number): string => `${n} change${n === 1 ? '' : 's'}`;

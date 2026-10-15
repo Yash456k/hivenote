@@ -7,7 +7,7 @@ import type { Server } from 'node:http';
 import { byline, HiveNoteError, VERSION, type Actor, type Event, type Method, type Params, type Store } from './contract.js';
 import { HttpStore } from './client.js';
 import { configDirectory, defaultDbPath, loadConfig, readToken, resolveConfig, takeoverMs, type Config } from './config.js';
-import { isQueued, waiting, type QueueStore } from './queue.js';
+import { isQueued, kept, reminder, type QueueStore } from './queue.js';
 import { assertSupportedNode, detectAgent, quietSqliteWarning } from './runtime.js';
 import { WAIT_DEFAULTS, changesSince, waitForAnyChange, waitForNote, type TaskStatus } from './wait.js';
 import { pretty } from './pretty.js';
@@ -50,13 +50,14 @@ Machines
   hivenote ui                             open the dashboard for this machine's hive
   hivenote connect [URL]                  use the queen's hive from this machine
   hivenote disconnect                     go back to this machine's own hive
-  hivenote status                         which hive this machine uses, whether it answers, and writes waiting for it
+  hivenote status                         which hive this machine uses, whether it answers, and writes kept here
   hivenote token add LABEL [read-only]    let another machine in (token list, token remove LABEL)
   hivenote backup FILE | hivenote mcp
 
 When the queen is down
   hivenote standby                        keep a copy of the queen's hive on this worker (token add LABEL standby)
   hivenote serve standby [HOST][:PORT]    serve that copy as a temporary queen while she is down
+  hivenote merge                          send the queen the writes kept here while she was away
   hivenote merge URL                      when she is back, send her what was written on the temporary queen
 
 Any text can be - to read it from a file or typed input: hivenote replace notes - < notes.md
@@ -87,7 +88,7 @@ interface LocalStore extends Store {
  * A person at a terminal gets a readable view; agents, scripts and --json get JSON.
  * That JSON is lean, the parts an agent acts on, unless --full asks for the stored record.
  */
-const view: { human: boolean; full: boolean; command: string; since?: number; anyway: boolean; after?: string[]; writtenOut: boolean } = { human: false, full: false, command: '', anyway: false, writtenOut: false };
+const view: { human: boolean; full: boolean; command: string; since?: number; anyway: boolean; after?: string[]; writtenOut: boolean; kept: number } = { human: false, full: false, command: '', anyway: false, writtenOut: false, kept: 0 };
 
 /** Said when text arrives with \n typed out: a shell passes those two characters on as they are. */
 function writtenOut(name: string): string {
@@ -96,22 +97,28 @@ function writtenOut(name: string): string {
 }
 
 /** Said for a write made while the queen could not be reached. */
-const KEPT = "The queen can't be reached. This write is kept on this machine and sent, in order, by the next hivenote command that reaches her";
+const KEPT = "The queen can't be reached, so this write is kept on this machine. It reaches her only when the user runs hivenote merge";
+
+/** While writes are kept here, every answer says so once: a line on stderr for a person, a count for an agent. */
+function remind(): void {
+  if (view.kept) process.stderr.write(`hivenote: ${reminder(view.kept)}\n`);
+}
 
 function output(value: unknown): void {
   if (isQueued(value)) {
-    const { note, waiting: count } = value.queued;
-    if (view.human) process.stdout.write(`Kept here to send later: the queen can't be reached (${count} write${count === 1 ? '' : 's'} waiting).\n`);
-    else process.stdout.write(JSON.stringify({ ok: 'queued', note, waiting: count, heads_up: KEPT }) + '\n');
+    if (view.human) { process.stdout.write("Kept here: the queen can't be reached.\n"); remind(); }
+    else process.stdout.write(JSON.stringify({ ok: 'queued', note: value.queued.note, kept: view.kept, heads_up: KEPT }) + '\n');
     return;
   }
   if (view.human) {
     process.stdout.write(pretty(view.command, value) + '\n');
     if (view.writtenOut) process.stderr.write(`hivenote: ${writtenOut((value as { note: { name: string } }).note.name)}\n`);
+    remind();
     return;
   }
-  const shown = view.full ? value : lean(view.command, value);
+  let shown = view.full ? value : lean(view.command, value);
   if (view.writtenOut && !view.full) (shown as { note: string; heads_up?: string }).heads_up ??= writtenOut((shown as { note: string }).note);
+  if (view.kept && typeof shown === 'object' && shown !== null && !Array.isArray(shown)) shown = { ...shown, kept: view.kept };
   process.stdout.write(JSON.stringify(shown) + '\n');
 }
 
@@ -238,17 +245,18 @@ async function openLocalStore(config: Config, options: { keepReceipts?: boolean 
   return new SqliteStore(config.db ?? defaultDbPath(), actor, { ...options, ...(takeover === undefined ? {} : { takeoverMs: takeover }) });
 }
 
-/**
- * The queen's hive, from a worker. Writes made while she can't be reached are kept and sent later.
- * Each command is a new process; the helper holds the connection they share.
- */
-async function queenStore(config: Config): Promise<QueueStore> {
+/** The queen, with these labels. Each command is a new process; the helper holds the connection they share. */
+async function reachQueen(config: Config): Promise<(labels: { agent?: string; session?: string }) => Store> {
   const token = readToken(config);
   const helper = await import('./helper.js');
-  const reach = (labels: { agent?: string; session?: string }): Store => (helper.helperPlan(config.helper).enabled ? new helper.HelperStore(config.url!, token, labels) : new HttpStore(config.url!, token, labels));
+  return labels => (helper.helperPlan(config.helper).enabled ? new helper.HelperStore(config.url!, token, labels) : new HttpStore(config.url!, token, labels));
+}
+
+/** The queen's hive, from a worker. Writes made while she can't be reached are kept here until hivenote merge. */
+async function queenStore(config: Config): Promise<QueueStore> {
   const labels = config.agent ? { agent: config.agent } : {};
   const { QueueStore } = await import('./queue.js');
-  return new QueueStore(reach(labels), reach, labels, line => { process.stderr.write(`hivenote: ${line}\n`); });
+  return new QueueStore((await reachQueen(config))(labels), labels);
 }
 
 /** The queen's hive when connected; otherwise the file on this machine. */
@@ -643,18 +651,15 @@ async function runStatus(config: Config): Promise<void> {
     return;
   }
   const url = config.url;
+  view.kept = kept();
   let health: { ok?: boolean; version?: string };
   try {
     const response = await fetch(new URL('/health', url), { redirect: 'error', signal: AbortSignal.timeout(10000) });
     health = await response.json() as typeof health;
   } catch {
-    const kept = waiting();
-    const queue = kept ? ` ${kept} write${kept === 1 ? '' : 's'} made here ${kept === 1 ? 'is' : 'are'} waiting to be sent to her.` : '';
-    throw new HiveNoteError('queen_unreachable', `Can't reach the queen at ${url}. Check that it is running and that this machine can reach it.${queue}`, 503);
+    throw new HiveNoteError('queen_unreachable', `Can't reach the queen at ${url}. Check that it is running and that this machine can reach it.`, 503);
   }
   if (health?.ok !== true) throw new HiveNoteError('not_a_queen', `${url} answered, but it isn't a HiveNote queen.`, 502);
-  // Reaching the queen is when the writes kept here go.
-  try { await (await queenStore(config)).flush(); } catch { /* still kept; counted below */ }
   const store = new HttpStore(url, readToken(config), { retries: 0 });
   const started = performance.now();
   let total: number;
@@ -667,7 +672,7 @@ async function runStatus(config: Config): Promise<void> {
     throw error;
   }
   output({
-    hive: 'queen', url, reachable: true, token: 'accepted', notes: total, queued: waiting(),
+    hive: 'queen', url, reachable: true, token: 'accepted', notes: total, kept: view.kept,
     connection: await connection(config),
     queen_version: health.version ?? 'unknown', this_version: VERSION, round_trip_ms: Math.round(performance.now() - started),
   });
@@ -728,8 +733,11 @@ async function runStandby(command: string, words: string[], config: Config): Pro
     return;
   }
   if (command === 'merge') {
-    if (words.length !== 1) fail('Usage: hivenote merge URL (the main queen\'s address)');
-    output(await standby.merge(words[0]!, readToken(config)));
+    if (words.length > 1) fail('Usage: hivenote merge (the writes kept here) | hivenote merge URL (on a temporary queen, the main queen\'s address)');
+    if (words.length) { output(await standby.merge(words[0]!, readToken(config))); return; }
+    if (!config.url) throw new HiveNoteError('invalid_args', 'This machine is not connected to a queen, so it has no kept writes to send. On a temporary queen, give the main queen\'s address: hivenote merge URL');
+    const { mergeKept } = await import('./queue.js');
+    try { output(await mergeKept(config.url, await reachQueen(config))); } finally { view.kept = kept(); }
     return;
   }
   const { queen } = await standby.takeOver();
@@ -827,11 +835,14 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   }
   if (words.length < spec.min || words.length > spec.max) fail(`Usage: hivenote ${spec.usage}`);
   const store = await openStore(config);
+  let result: unknown;
   try {
-    output(await spec.run(words, store));
+    result = await spec.run(words, store);
   } finally {
     store.close?.();
+    if (config.url) view.kept = kept();
   }
+  output(result);
 }
 
 if (process.argv[1] && realpathSync(resolve(process.argv[1])) === fileURLToPath(import.meta.url)) {
@@ -839,7 +850,7 @@ if (process.argv[1] && realpathSync(resolve(process.argv[1])) === fileURLToPath(
     // Never print arbitrary exceptions, request headers, tokens or stack traces.
     const e = error instanceof HiveNoteError ? error : new HiveNoteError('internal_error', 'Operation failed', 500);
     process.exitCode = 1;
-    if (view.human) { process.stderr.write(`hivenote: ${e.message}\n`); return; }
-    process.stderr.write(JSON.stringify({ error: { code: e.code, message: e.message, status: e.status, ...(e.details === undefined ? {} : { details: view.full ? e.details : leanDetails(e.details) }) } }) + '\n');
+    if (view.human) { process.stderr.write(`hivenote: ${e.message}\n`); remind(); return; }
+    process.stderr.write(JSON.stringify({ error: { code: e.code, message: e.message, status: e.status, ...(e.details === undefined ? {} : { details: view.full ? e.details : leanDetails(e.details) }) }, ...(view.kept ? { kept: view.kept } : {}) }) + '\n');
   });
 }

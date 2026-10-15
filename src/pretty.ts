@@ -138,7 +138,7 @@ export function pretty(command: string, value: unknown): string {
     }
     case 'status': if (v.hive === 'temporary queen') return `This machine is a temporary queen for ${String(v.queen)}\n${dim(`${String(v.changes)} change${v.changes === 1 ? '' : 's'} made here ${v.changes === 1 ? 'is' : 'are'} not on her yet · when she is back: hivenote merge ${String(v.queen)}`)}`;
       return v.hive === 'queen'
-      ? `Connected to the queen at ${String(v.url)}\n${dim(`${notes(v.notes)} · queen ${String(v.queen_version)} · this machine ${String(v.this_version)} · ${String(v.round_trip_ms)} ms · connection ${String(v.connection)}${v.queued ? ` · ${String(v.queued)} kept writes waiting` : ''}`)}`
+      ? `Connected to the queen at ${String(v.url)}\n${dim(`${notes(v.notes)} · queen ${String(v.queen_version)} · this machine ${String(v.this_version)} · ${String(v.round_trip_ms)} ms · connection ${String(v.connection)}`)}`
       : `Using this machine's own hive at ${String(v.db)}\n${dim(`${notes(v.notes)} · version ${String(v.version)}`)}`;
     case 'connect': return `Connected to the queen at ${String(v.connected)} (${notes(v.entries)}). Every hivenote command here now uses that hive.`;
     case 'disconnect': return 'Disconnected. This machine uses its own hive again. To shut the old token out too, run hivenote token remove LABEL on the queen.';
@@ -161,9 +161,9 @@ export function pretty(command: string, value: unknown): string {
     case 'standby': return `This machine keeps a standby copy of the hive at ${String(v.standby)}, current to change ${String(v.seq)}.\n${dim('It keeps following her until stopped. If she goes down: hivenote serve standby')}`;
     case 'merge': {
       const notMerged = v.not_merged as { change: string; by: string; why: string }[];
-      const lines = [`Merged into the main queen at ${String(v.merged_into)}: ${String(v.applied)} change${v.applied === 1 ? '' : 's'} applied${v.already ? dim(` (${String(v.already)} she had already)`) : ''}`];
+      const lines = [`Merged into the queen at ${String(v.merged_into)}: ${String(v.applied)} write${v.applied === 1 ? '' : 's'} applied${v.already ? dim(` (${String(v.already)} she had already)`) : ''}`];
       if (notMerged.length) lines.push('', bold(`Not merged (${notMerged.length}):`), ...notMerged.map(item => `  ${item.change} ${dim(`by ${item.by}`)}: ${item.why}`));
-      return [...lines, '', dim(String(v.next))].join('\n');
+      return [...lines, ...(v.next ? ['', dim(String(v.next))] : [])].join('\n');
     }
     case 'ui': return `Dashboard: ${String(v.dashboard)}`;
     case 'backup': return `Backed up to ${String(v.path)}`;
