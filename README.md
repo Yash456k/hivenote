@@ -66,6 +66,18 @@ On one machine there is nothing to run: the hive is a single SQLite file on your
 
 Agents get short JSON with the parts they act on (`--full` for the whole stored record); when you type a command yourself, you get a readable view. `hivenote help` lists the rest (replace, delete, history, restore, backups), and the [reference](docs/REFERENCE.md) covers all of it.
 
+## How it compares
+
+Measured on one 4-vCPU server; the setup, every number and a script to rerun them are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+
+| | |
+|---|---|
+| Handing work to a waiting agent | about 0.1 s over the internet, against about 12 s through shared notes in a GitHub repo pulled every 15 s |
+| Two agents taking the same task | never both: 0 double claims in 100,000 attempts. When agents claimed at the same moment, GitHub Issues let several take 10 of 10 tasks, and Beads syncing two machines did the same |
+| The server killed mid-write | 50 times with `kill -9`: 0 of 17,887 acknowledged writes lost or duplicated |
+| Memory that keeps growing | 4 times faster than the official MCP memory server at 10,000 entries (the memory server was faster on an empty store) |
+| Finding the 3 notes an agent needs | 8 to 10 times fewer tokens than reading one shared notes file |
+
 ## Run it yourself
 
 You need Node 22.16 or newer.
