@@ -77,13 +77,15 @@ export class HttpStore implements Store {
     const busyUntil = Date.now() + 5000;
     // Whether any try may have reached her: a write that did may have been made even though no answer came back.
     let maybeSent = false;
+    // Whether a try before the one answered may have reached her: then a refusal now says nothing about that one.
+    let earlier = false;
     const unreachable = (message: string): HiveNoteError => new HiveNoteError('transport_error', message, 503, maybeSent ? undefined : { sent: false });
     for (let attempt = 0; ; attempt++) {
       let response: Response;
       try {
         response = await this.send(this.endpoint, { method: 'POST', redirect: 'error', headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}` }, body, signal: AbortSignal.timeout(timeoutMs) });
       } catch (error) {
-        if (!neverConnected(error)) maybeSent = true;
+        if (!neverConnected(error)) { maybeSent = true; earlier = true; }
         if (attempt < retries) { await pause(attempt); continue; }
         throw unreachable('Unable to reach HiveNote server');
       }
@@ -98,11 +100,13 @@ export class HttpStore implements Store {
       try { payload = await response.json(); } catch (error) {
         // A truncated connection after headers is still a transport failure.
         if (!(error instanceof SyntaxError)) {
+          earlier = true;
           if (attempt < retries) { await pause(attempt); continue; }
           throw new HiveNoteError('transport_error', 'Server connection interrupted', 503);
         }
         // A tunnel or proxy in front of the queen answers with its own error page while she is down.
         if (response.status >= 500) {
+          earlier = true;
           if (attempt < retries) { await pause(attempt); continue; }
           throw new HiveNoteError('transport_error', 'Unable to reach HiveNote server', 503);
         }
@@ -113,7 +117,7 @@ export class HttpStore implements Store {
       if (!response.ok) {
         const error = object.error as Record<string, unknown> | undefined;
         if (tooOld(method, params, error)) throw queenTooOld(this.serverVersion);
-        throw new HiveNoteError(typeof error?.code === 'string' ? error.code : 'http_error', typeof error?.message === 'string' ? error.message : `Server returned HTTP ${response.status}`, response.status, error?.details);
+        throw maybe(new HiveNoteError(typeof error?.code === 'string' ? error.code : 'http_error', typeof error?.message === 'string' ? error.message : `Server returned HTTP ${response.status}`, response.status, error?.details), earlier);
       }
       if (!Object.hasOwn(object, 'result')) throw new HiveNoteError('invalid_response', 'Server response is missing result', 502);
       return object.result;
@@ -131,6 +135,16 @@ function tooOld(method: Method, params: Params, error: Record<string, unknown> |
   if (method === 'take' && error?.code === 'invalid_request' && message.startsWith('Expected {method')) return true;
   return error?.code === 'validation_error' && message.startsWith('Unknown parameter') && NEWER_PARAMS.some(key => params[key] !== undefined);
 }
+/**
+ * A refusal that came after an earlier try of the same write may have reached her: she may have made it then, so the
+ * refusal does not show that she did not. Kept on the error, out of what is printed.
+ */
+export function maybe(error: HiveNoteError, maybeSent: boolean): HiveNoteError {
+  if (maybeSent) Object.defineProperty(error, 'maybeSent', { value: true, enumerable: false });
+  return error;
+}
+export function mayHaveLanded(error: unknown): boolean { return (error as { maybeSent?: boolean }).maybeSent === true; }
+
 /**
  * Whether a failed request certainly never reached the queen: the connection itself was refused or could not be
  * opened. A timeout or a dropped connection may have come after she read the request, so those count as sent.

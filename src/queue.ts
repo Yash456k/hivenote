@@ -7,7 +7,7 @@ import { age, clientParams, HiveNoteError, MUTATIONS, type Attribution, type Eve
 import { configDirectory } from './config.js';
 import { reachQueen, writes } from './merge.js';
 import { markDown, SeenCache } from './seen.js';
-import { queenTooOld, validateServerUrl } from './client.js';
+import { mayHaveLanded, queenTooOld, validateServerUrl } from './client.js';
 import { LIMITS, metadata as checkMetadata, status as checkStatus, text } from './validate.js';
 import { afterIds, brief, type BriefNote } from './views.js';
 
@@ -531,7 +531,7 @@ function originKnown(conflict: Conflict, queen: string | undefined): boolean { r
  * after the tasks made here that it waits on, so it never waits on someone else's task by the same name. Otherwise
  * oldest first.
  */
-function inOrder(left: Entry[]): Entry[] {
+function inOrder(left: Entry[]): { order: Entry[]; loop: Set<Entry> } {
   const byId = new Map<string, Entry>(), byName = new Map<string, Entry>();
   for (const entry of left) if (entry.method === 'create' && entry.unreadable === undefined) { byId.set(`${entry.queen}\n${String(entry.params.id)}`, entry); byName.set(`${entry.queen}\n${entry.name}`, entry); }
   const needs = new Map<Entry, Entry[]>(left.map(entry => {
@@ -540,17 +540,21 @@ function inOrder(left: Entry[]): Entry[] {
     const names = Array.isArray(entry.params.after) ? (entry.params.after as unknown[]).map(String) : [];
     return [entry, names.flatMap(name => { const create = byName.get(`${entry.queen}\n${name}`); return create && create !== entry ? [create] : []; })];
   }));
-  const done = new Set<Entry>(), out: Entry[] = [];
+  const done = new Set<Entry>(), out: Entry[] = [], loop = new Set<Entry>();
+  const reaches = (from: Entry, target: Entry, seen = new Set<Entry>()): boolean => needs.get(from)!.some(other => other === target || (!seen.has(other) && (seen.add(other), reaches(other, target, seen))));
   while (out.length < left.length) {
     let moved = false;
     for (const entry of left) {
       if (done.has(entry) || !needs.get(entry)!.every(other => done.has(other))) continue;
       done.add(entry); out.push(entry); moved = true;
     }
-    // Tasks that wait on each other in a loop can't be put in order: the oldest of them goes, as before.
-    if (!moved) { const next = left.find(entry => !done.has(entry))!; done.add(next); out.push(next); }
+    if (moved) continue;
+    // Tasks kept waiting on each other in a loop: the queen allows none, and sending one first would make it wait on
+    // whatever she has by the other's name. They go next, marked, and merge makes conflicts of them.
+    const members = left.filter(entry => !done.has(entry) && reaches(entry, entry));
+    for (const entry of members.length ? members : [left.find(entry => !done.has(entry))!]) { done.add(entry); out.push(entry); loop.add(entry); }
   }
-  return out;
+  return { order: out, loop };
 }
 
 /**
@@ -589,7 +593,9 @@ export async function mergeKept(address: string, reach: (labels: Labels) => Stor
       held.set(id, conflict);
       report.push({ note: entry.name, kind: conflict.kind, by: entry.agent ?? HERE, why });
     };
-    for (const entry of inOrder(left)) {
+    const { order, loop } = inOrder(left);
+    const loopNames = new Set([...loop].map(entry => entry.name));
+    for (const entry of order) {
       const id = String(entry.params.id ?? '');
       if (entry.unreadable !== undefined) {
         await addConflict({ kind: 'progress', name: '(unreadable)', progress: [entry.unreadable], why: 'This line in the kept file could not be read, probably cut short by a crash. Its text is kept as it was', code: 'unreadable' });
@@ -600,6 +606,17 @@ export async function mergeKept(address: string, reach: (labels: Labels) => Stor
       if (!forQueen(entry, queen)) continue;
       const earlier = held.get(id);
       if (earlier && entry.method === 'append') { held.set(id, await addLineToConflict(earlier, String(entry.params.body))); settle(entry); continue; }
+      if (loop.has(entry) && entry.method === 'create') {
+        // The waits that make the loop are taken out of what is kept, so it can be settled; the rest stay.
+        const after = Array.isArray(entry.params.after) ? (entry.params.after as unknown[]).map(String) : [];
+        const dropped = after.filter(name => loopNames.has(name));
+        const { after: _after, ...rest } = entry.params;
+        const kept = after.filter(name => !loopNames.has(name));
+        entry.params = kept.length ? { ...rest, after: kept } : rest;
+        await conflictFor(entry, `It was kept waiting on ${dropped.map(name => `'${name}'`).join(', ')}, added here too, which ${dropped.length === 1 ? 'waits' : 'wait'} on it in turn. The queen allows no such loop, so that wait was taken out: settle this, then add it back with hivenote after if it still makes sense`, 'waits_in_loop');
+        settle(entry);
+        continue;
+      }
       // A task that waits on one made here that she did not take would wait on whatever she has under that name.
       const after = entry.method === 'create' && Array.isArray(entry.params.after) ? (entry.params.after as unknown[]).map(String) : [];
       const waitsOnHeld = after.find(name => [...held.values()].some(conflict => conflict.name === name && conflict.kind === 'task' && conflict.params !== undefined));
@@ -624,8 +641,10 @@ export async function mergeKept(address: string, reach: (labels: Labels) => Stor
         }
       } catch (error) {
         if (!(error instanceof HiveNoteError)) throw error;
-        // Refused before it reached her, or answered with a refusal: she did not make it, so it is only here again.
-        if (error.code !== 'op_id_conflict' && (error.code !== 'transport_error' || (error.details as { sent?: boolean } | undefined)?.sent === false)) unsent();
+        // Never reached her, or refused by her with no earlier try of it that may have reached her: she did not make
+        // it, so it is only here again. Anything less certain leaves it waiting for a merge to find out.
+        const certainlyNot = error.code === 'transport_error' ? (error.details as { sent?: boolean } | undefined)?.sent === false : error.code !== 'op_id_conflict' && !mayHaveLanded(error);
+        if (certainlyNot) unsent();
         if (error.code === 'op_id_conflict') already++;
         // She can't be reached, is busy, or won't take writes from this token: stop, and keep everything left.
         else if (error.code === 'transport_error' || error.code === 'busy' || error.status === 401 || error.status === 403) {
@@ -722,7 +741,7 @@ export async function resolveConflict(store: Store, name: string, how: 'as' | 'a
   // Straight to her and remembered as any answer is: kept here instead, its write would wait for a merge while the
   // conflict was already called settled.
   const worker = store as Partial<QueueStore>;
-  const send = (method: Method, params: Params): Promise<unknown> => (worker.send ? worker.send(method, params) : store.call(method, params));
+  const sendTo = (method: Method, params: Params): Promise<unknown> => (worker.send ? worker.send(method, params) : store.call(method, params));
   // The kept writes first, then the conflicts, as merge takes them: a resolve waits for a merge that is running, so
   // a progress line merge is adding to this conflict is never lost or put back after it was settled.
   return locked(queuePath(), () => locked(conflictsPath(), async () => {
@@ -743,8 +762,17 @@ export async function resolveConflict(store: Store, name: string, how: 'as' | 'a
     let answer: Record<string, unknown> = { ok: 'resolved', note: name, how };
     // Each write gets an op_id fixed by the conflict and the step, so running resolve again after one that stopped
     // part way makes nothing twice: what she has is answered from her receipts.
-    const seed = createHash('sha256').update(JSON.stringify([conflict, how, newName ?? ''])).digest('hex');
+    // The seed is what stays the same for this conflict however it grows: more progress lines joining it, or what a
+    // task waits on renamed, must not give a step already made a new op_id.
+    const identity = conflict.id ? [conflict.id, conflict.queen ?? '', conflict.params === undefined, conflict.params?.op_id ?? ''] : [conflict.name, conflict.params ?? null];
+    const seed = createHash('sha256').update(JSON.stringify([identity, how, newName ?? ''])).digest('hex');
     const op = (step: number): string => `resolve-${seed.slice(0, 32)}-${step}`;
+    // A step she already has under its op_id is one this resolve made before it stopped: it is not made again.
+    const send = async (method: Method, params: Params): Promise<void> => {
+      try { await sendTo(method, params); } catch (error) {
+        if (!(error instanceof HiveNoteError && error.code === 'op_id_conflict')) throw error;
+      }
+    };
     if (how === 'as') {
       if (conflict.params) {
         const { id: _id, op_id: _op, ...params } = conflict.params;
@@ -764,16 +792,23 @@ export async function resolveConflict(store: Store, name: string, how: 'as' | 'a
       for (const [i, body] of parts.entries()) await send('append', { note: name, body, op_id: op(i + 1) });
     }
     all.splice(index, 1);
-    // Tasks made here that waited on this one now wait on it under its new name, or on nothing when it was dropped.
-    // Taken as it was meant: a note settled as progress on hers leaves them waiting on hers, as the name says.
+    // Tasks made here that waited on this one now wait on it under its new name, or on nothing when it was dropped,
+    // in the conflicts and in what is still kept to send. A note settled as progress on hers leaves them waiting on
+    // hers, as the name says. The kept writes are saved first: run again after a crash, this is made again the same.
     if (conflict.kind === 'task' && conflict.params && how !== 'append') {
-      for (const item of all) {
-        const after = item.params?.after;
-        if (item.queen !== conflict.queen || !Array.isArray(after) || !after.includes(name)) continue;
+      const rename = (params: Params): Params => {
+        const after = params.after as unknown[];
         const next = how === 'as' ? after.map(other => (other === name ? newName : other)) : after.filter(other => other !== name);
-        const { after: _after, ...rest } = item.params!;
-        item.params = next.length ? { ...rest, after: next } : rest;
+        const { after: _after, ...rest } = params;
+        return next.length ? { ...rest, after: next } : rest;
+      };
+      const waits = (item: { params?: Params; queen?: string; method?: string }): boolean => item.queen === conflict.queen && Array.isArray(item.params?.after) && (item.params!.after as unknown[]).includes(name);
+      const kept = entries(queuePath());
+      if (kept.some(item => item.method === 'create' && waits(item))) {
+        for (const item of kept) if (item.method === 'create' && waits(item)) item.params = rename(item.params);
+        save(queuePath(), kept);
       }
+      for (const item of all) if (waits(item)) item.params = rename(item.params!);
     }
     saveConflicts(all);
     return { ...answer, conflicts_left: all.filter(item => conflictOf(item, queen)).length };
@@ -783,11 +818,9 @@ export async function resolveConflict(store: Store, name: string, how: 'as' | 'a
 /** Whether the lock was left by a command on this machine that is no longer running. */
 function leftBehind(lock: string): boolean {
   try {
-    const text = readFileSync(lock, 'utf8');
-    // An earlier build left its lock empty, and touched it every 20 seconds while it held it: one untouched for
-    // longer was left by a command that stopped.
-    if (text === '') return Date.now() - statSync(lock).mtimeMs > 30_000;
-    const [pid, host] = text.split('\n');
+    // An earlier build leaves its lock empty: only its age says whether it was left behind, and a command paused for
+    // a while still holds it, so it waits out the two minutes that build itself goes by.
+    const [pid, host] = readFileSync(lock, 'utf8').split('\n');
     if (host !== hostname() || !/^\d+$/u.test(pid ?? '') || Number(pid) === process.pid) return false;
     try { process.kill(Number(pid), 0); return false; } catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; }
   } catch { return false; }

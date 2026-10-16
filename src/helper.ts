@@ -8,7 +8,7 @@ import { tmpdir, userInfo } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { clientParams, HiveNoteError, MUTATIONS, VERSION, type Method, type Params, type Store } from './contract.js';
-import { HttpStore, warnOnOtherVersion } from './client.js';
+import { HttpStore, mayHaveLanded, maybe, warnOnOtherVersion } from './client.js';
 import { configDirectory } from './config.js';
 
 /**
@@ -39,7 +39,7 @@ export function helperPlan(configured?: string): { enabled: boolean; idleMs: num
 const LIMIT = 6 * 1024 * 1024;   // one answer is at most 5 MB
 type Labels = { agent?: string; session?: string };
 interface Ask { key: string; method: Method; params: Params; agent?: string; session?: string }
-interface Reply { result?: unknown; error?: { code: string; message: string; status: number; details?: unknown }; version?: string | null }
+interface Reply { result?: unknown; error?: { code: string; message: string; status: number; details?: unknown; maybe_sent?: boolean }; version?: string | null }
 
 /** Where the helper for this queen and token listens: a socket file, or a named pipe on Windows. */
 function address(url: string, token: string): string {
@@ -150,6 +150,7 @@ export class HelperStore implements Store {
       if (!(error as { handed?: boolean }).handed || !MUTATIONS.has(method)) return this.direct.call(method, prepared);
       try { return await this.direct.call(method, prepared); } catch (direct) {
         if (direct instanceof HiveNoteError && direct.code === 'transport_error') throw new HiveNoteError(direct.code, direct.message, direct.status);
+        if (direct instanceof HiveNoteError) throw maybe(direct, true);
         throw direct;
       }
     }
@@ -157,7 +158,7 @@ export class HelperStore implements Store {
       this.versionChecked = true;
       warnOnOtherVersion(reply.version, new URL(this.url).origin);
     }
-    if (reply.error) throw new HiveNoteError(reply.error.code, reply.error.message, reply.error.status, reply.error.details);
+    if (reply.error) throw maybe(new HiveNoteError(reply.error.code, reply.error.message, reply.error.status, reply.error.details), reply.error.maybe_sent === true);
     return reply.result;
   }
   close(): void {}
@@ -215,7 +216,7 @@ export async function runHelper(url: string, token: string, idleMs: number): Pro
       return { result: await store.call(request.method, request.params), version: store.serverVersion };
     } catch (error) {
       const e = error instanceof HiveNoteError ? error : new HiveNoteError('internal_error', 'Operation failed', 500);
-      return { error: { code: e.code, message: e.message, status: e.status, ...(e.details === undefined ? {} : { details: e.details }) }, version: store?.serverVersion ?? null };
+      return { error: { code: e.code, message: e.message, status: e.status, ...(e.details === undefined ? {} : { details: e.details }), ...(mayHaveLanded(e) ? { maybe_sent: true } : {}) }, version: store?.serverVersion ?? null };
     }
   };
 
