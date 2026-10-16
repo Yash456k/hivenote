@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { type Event, type Note } from './contract.js';
 import { configDirectory } from './config.js';
@@ -23,22 +23,48 @@ const MAX_BYTES = 20 * 1024 * 1024;
 
 export function seenPath(): string { return join(configDirectory(), 'seen.json'); }
 
+/** Set when a command could not reach the queen, so the next ones within a while don't wait as long on her. */
+export function downPath(): string { return join(configDirectory(), 'queen-down'); }
+/** Whether a command found the queen unreachable within the last two minutes. */
+export function recentlyDown(path = downPath()): boolean {
+  try { return Date.now() - statSync(path).mtimeMs < 120_000; } catch { return false; }
+}
+export function markDown(down: boolean, path = downPath()): void {
+  try {
+    if (!down) { rmSync(path, { force: true }); return; }
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    writeFileSync(path, `${new Date().toISOString()}\n`, { mode: 0o600 });
+  } catch { /* a hint for speed only */ }
+}
+
 export class SeenCache {
   private data: Seen | undefined;
   private dirty = false;
+  /**
+   * What this command changed, so saving puts only that over the file as it is then: other commands on this
+   * machine save too, and writing back a copy read at the start would undo what they saw meanwhile.
+   */
+  private readonly changed = { notes: new Set<string>(), briefs: new Set<string>(), goneNotes: new Set<string>(), goneBriefs: new Set<string>() };
 
   constructor(private readonly queen: string, private readonly path = seenPath()) {}
 
+  private load(): Seen | undefined {
+    try {
+      const read = JSON.parse(readFileSync(this.path, 'utf8')) as Seen;
+      if (read.queen === this.queen && read.notes && read.briefs) return read;
+    } catch { /* nothing seen yet, or another queen's */ }
+    return undefined;
+  }
+
   private get(): Seen {
-    if (!this.data) {
-      try {
-        const read = JSON.parse(readFileSync(this.path, 'utf8')) as Seen;
-        if (read.queen === this.queen && read.notes && read.briefs) this.data = read;
-      } catch { /* nothing seen yet, or another queen's */ }
-      this.data ??= { queen: this.queen, at: '', notes: {}, briefs: {} };
-    }
+    this.data ??= this.load() ?? { queen: this.queen, at: '', notes: {}, briefs: {} };
     return this.data;
   }
+
+  private setNote(id: string, value: Seen['notes'][string]): void { this.get().notes[id] = value; this.changed.notes.add(id); this.changed.goneNotes.delete(id); this.dirty = true; }
+  private dropNote(id: string): void { delete this.get().notes[id]; this.changed.goneNotes.add(id); this.changed.notes.delete(id); this.dirty = true; }
+  private setBrief(id: string, value: BriefNote): void { this.get().briefs[id] = value; this.changed.briefs.add(id); this.changed.goneBriefs.delete(id); this.dirty = true; }
+  private dropBrief(id: string): void { delete this.get().briefs[id]; this.changed.goneBriefs.add(id); this.changed.briefs.delete(id); this.dirty = true; }
 
   /**
    * The queen answered just now. Saved with the next change, or once a minute: rewriting a large file on every
@@ -59,13 +85,14 @@ export class SeenCache {
     const now = new Date().toISOString();
     for (const note of notes) {
       if (note.deleted_at) { this.forget(note.id); continue; }
+      // Names are unique among her live notes: anything else seen under this name is not this note.
+      this.forgetName(note.name, note.id);
       const lines = updates.filter(update => update.note_id === note.id && update.body !== null);
       const before = data.notes[note.id];
       // Progress lines are never taken away, so lines seen earlier still hold when none came this time.
-      data.notes[note.id] = { note, updates: lines.length || !before ? lines : before.updates, seen: now };
-      data.briefs[note.id] = brief(note);
+      this.setNote(note.id, { note, updates: lines.length || !before ? lines : before.updates, seen: now });
+      this.setBrief(note.id, brief(note));
     }
-    this.dirty = true;
   }
 
   /** Names and descriptions, from a listing or a search. */
@@ -73,39 +100,33 @@ export class SeenCache {
     const data = this.get();
     for (const { snippet: _snippet, ...entry } of entries) {
       if (typeof entry.id !== 'string') continue;
-      data.briefs[entry.id] = entry;
+      this.forgetName(entry.name, entry.id);
+      this.setBrief(entry.id, entry);
       // A note that changed since it was read is no longer known whole: its old text under maybe an old name would
       // be answered as if it were current, and a write by that name could land on the wrong note.
-      const whole = data.notes[entry.id]?.note;
-      if (whole && (whole.updated_at !== entry.updated_at || whole.name !== entry.name)) delete data.notes[entry.id];
+      const whole = data.notes[entry.id];
+      if (!whole) continue;
+      if (whole.note.updated_at !== entry.updated_at || whole.note.name !== entry.name) this.dropNote(entry.id);
       // The text is what was seen; a newer change to the state (a mark) is taken from the listing.
-      if (whole && data.notes[entry.id] && entry.status !== undefined) data.notes[entry.id]!.note.status = entry.status as Note['status'];
+      else if (entry.status !== undefined && whole.note.status !== entry.status) this.setNote(entry.id, { ...whole, note: { ...whole.note, status: entry.status as Note['status'] } });
     }
-    this.dirty = true;
   }
 
   /** A whole listing came back: whatever is not in it is no longer hers. */
   keepOnly(ids: Set<string>): void {
     const data = this.get();
-    for (const id of Object.keys(data.briefs)) if (!ids.has(id)) delete data.briefs[id];
-    for (const id of Object.keys(data.notes)) if (!ids.has(id)) delete data.notes[id];
-    this.dirty = true;
+    for (const id of Object.keys(data.briefs)) if (!ids.has(id)) this.dropBrief(id);
+    for (const id of Object.keys(data.notes)) if (!ids.has(id)) this.dropNote(id);
   }
 
-  /** She has no note by this name now. */
-  forgetName(name: string): void {
+  /** She has no note by this name now, other than the one with this id. */
+  forgetName(name: string, except?: string): void {
     const data = this.get();
-    for (const [id, entry] of Object.entries(data.notes)) if (entry.note.name === name) delete data.notes[id];
-    for (const [id, entry] of Object.entries(data.briefs)) if (entry.name === name) delete data.briefs[id];
-    this.dirty = true;
+    for (const [id, entry] of Object.entries(data.notes)) if (entry.note.name === name && id !== except) this.dropNote(id);
+    for (const [id, entry] of Object.entries(data.briefs)) if (entry.name === name && id !== except) this.dropBrief(id);
   }
 
-  forget(id: string): void {
-    const data = this.get();
-    delete data.notes[id];
-    delete data.briefs[id];
-    this.dirty = true;
-  }
+  forget(id: string): void { this.dropNote(id); this.dropBrief(id); }
 
   byName(name: string): Note | undefined {
     return Object.values(this.get().notes).map(entry => entry.note).filter(note => note.name === name).sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1))[0];
@@ -121,7 +142,14 @@ export class SeenCache {
 
   save(): void {
     if (!this.dirty || !this.data) return;
-    const data = this.data;
+    // What is on disk now, with this command's changes put over it.
+    const ours = this.data;
+    const data = this.load() ?? { queen: this.queen, at: '', notes: {}, briefs: {} };
+    for (const id of this.changed.goneNotes) delete data.notes[id];
+    for (const id of this.changed.goneBriefs) delete data.briefs[id];
+    for (const id of this.changed.notes) if (ours.notes[id]) data.notes[id] = ours.notes[id]!;
+    for (const id of this.changed.briefs) if (ours.briefs[id]) data.briefs[id] = ours.briefs[id]!;
+    if (ours.at > data.at) data.at = ours.at;
     let text = JSON.stringify(data);
     if (text.length > MAX_BYTES) {
       // Each note's size is measured once and the oldest let go until the rest fit; the file is then written once.
@@ -139,6 +167,8 @@ export class SeenCache {
       writeFileSync(temporary, text, { mode: 0o600 });
       renameSync(temporary, this.path);
     } catch { /* only a copy for later; the command itself worked */ }
+    this.data = data;
     this.dirty = false;
+    for (const set of Object.values(this.changed)) set.clear();
   }
 }

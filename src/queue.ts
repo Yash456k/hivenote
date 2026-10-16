@@ -5,8 +5,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { age, clientParams, HiveNoteError, MUTATIONS, type Attribution, type Event, type Method, type Note, type Params, type Store } from './contract.js';
 import { configDirectory } from './config.js';
 import { reachQueen, writes } from './merge.js';
-import { SeenCache } from './seen.js';
-import { validateServerUrl } from './client.js';
+import { markDown, SeenCache } from './seen.js';
+import { queenTooOld, validateServerUrl } from './client.js';
 import { LIMITS, metadata as checkMetadata, status as checkStatus, text } from './validate.js';
 import { afterIds, brief, type BriefNote } from './views.js';
 
@@ -128,7 +128,10 @@ export function isMadeHere(note: { last_attribution?: { principal?: string } } |
 export class QueueStore implements Store {
   /** Set once the queen could not be reached, so this command's next writes don't wait on her again. */
   private offline = false;
+  /** Whether this command found the queen unreachable. */
+  get gaveUp(): boolean { return this.offline; }
   private unreachable: HiveNoteError | undefined;
+  private reached = false;
   /** The ids of a whole listing, page by page, so notes she no longer has can be let go once it is complete. */
   private listing: Set<string> | undefined;
   private readonly seen: SeenCache;
@@ -168,6 +171,7 @@ export class QueueStore implements Store {
       sent = write;
       try {
         const answer = await this.inner.call(method, prepared);
+        if (!this.reached) { this.reached = true; markDown(false); }
         this.remember(method, prepared, answer);
         return this.withKept(method, prepared, answer);
       } catch (error) {
@@ -177,6 +181,8 @@ export class QueueStore implements Store {
         if (error.code !== 'transport_error') throw error;
         this.offline = true;
         this.unreachable = error;
+        // The next commands, for a while, give her one short try instead of the full wait.
+        markDown(true);
       }
     }
     if (write) {
@@ -226,9 +232,10 @@ export class QueueStore implements Store {
       const names = new Set(found.map(note => note.name));
       return { ...a, notes: [...a.notes, ...found], missing: a.missing!.filter(name => !names.has(name)), updates: [...(a.updates ?? []), ...updates.filter(update => found.some(note => note.id === update.note_id))] };
     }
-    if (params.offset || params.ready || params.folder || params.status || (params.kind && params.kind !== 'task')) return answer;
+    if (params.offset || params.ready || params.status || (params.kind && params.kind !== 'task')) return answer;
     const listed = new Set((a.notes as { name: string }[]).map(note => note.name));
-    const extra = made.filter(note => !listed.has(note.name) && (!params.kind || note.kind === params.kind)).map(brief);
+    const prefix = typeof params.folder === 'string' ? params.folder.replace(/\/+$/u, '') + '/' : '';
+    const extra = made.filter(note => !listed.has(note.name) && (!params.kind || note.kind === params.kind) && note.name.startsWith(prefix)).map(brief);
     return { ...a, notes: [...a.notes, ...extra], total: (a.total ?? 0) + extra.length };
   }
 
@@ -314,6 +321,8 @@ export class QueueStore implements Store {
       if (method === 'create') {
         const name = String(p.name ?? '');
         if (here.some(entry => entry.method === 'create' && entry.name === name)) throw new HiveNoteError('conflict', `'${name}' was already added on this machine while the queen was away. Change it with edit, replace or append`, 409);
+        // She had a note by that name when this machine last looked: adding it again could only fail at merge.
+        if (this.seen.idOf(name)) throw new HiveNoteError('conflict', `'${name}' is already on the queen, as this machine last saw her. Nothing was kept. Add progress to it with hivenote append ${name} "...", or choose another name`, 409);
         save(this.path, [...all, { method: 'create', params: p, name, ...base }]);
         return { queued: { note: name } };
       }
@@ -427,7 +436,7 @@ export interface MergeReport { merged_into: string; applied: number; already: nu
  * Each leaves the file as soon as it is settled, so a merge cut short carries on where it stopped.
  */
 export async function mergeKept(address: string, reach: (labels: Labels) => Store, path = queuePath()): Promise<MergeReport> {
-  const url = await reachQueen(address);
+  const { url, old, version } = await reachQueen(address);
   const queen = queenOf(url);
   let applied = 0, already = 0;
   const report: MergeReport['conflicts'] = [];
@@ -452,6 +461,8 @@ export async function mergeKept(address: string, reach: (labels: Labels) => Stor
       }
       const earlier = held.get(id);
       if (earlier && entry.method === 'append') { earlier.progress.push(String(entry.params.body)); await rewriteLast(earlier); settle(entry); continue; }
+      // A queen before 1.0 can't keep what a task waits on: stop before anything of it is half sent.
+      if (old && entry.method === 'create' && entry.params.after !== undefined) throw new HiveNoteError(queenTooOld(version).code, `${queenTooOld(version).message}. '${entry.name}' was kept with --after. ${writes(applied)} ${applied === 1 ? 'was' : 'were'} merged before it; the rest stay kept`, 501);
       try {
         // Sent with the op_id it was made with: a write she already has is answered from her receipt, or refused
         // as op_id_conflict once that receipt is gone, and is never made twice.
@@ -586,7 +597,15 @@ async function locked<T>(path: string, fn: () => T | Promise<T>): Promise<T> {
   for (;;) {
     try { closeSync(openSync(lock, 'wx', 0o600)); break; } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      try { if (Date.now() - statSync(lock).mtimeMs > 120_000) { rmSync(lock, { force: true }); continue; } } catch { continue; }
+      try {
+        if (Date.now() - statSync(lock).mtimeMs > 120_000) {
+          // Taken over by renaming it away: only one waiter's rename can move that file, and a fresh lock someone
+          // made after it is never removed.
+          const stale = `${lock}.${process.pid}.${Date.now()}.stale`;
+          try { renameSync(lock, stale); rmSync(stale, { force: true }); } catch { /* another waiter took it first */ }
+          continue;
+        }
+      } catch { continue; }
       if (Date.now() > until) throw new HiveNoteError('busy', 'Another hivenote command is changing what is kept on this machine; try again', 503);
       await sleep(50);
     }

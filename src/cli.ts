@@ -254,9 +254,11 @@ async function openLocalStore(config: Config): Promise<LocalStore> {
 }
 
 /** The queen, with these labels. Each command is a new process; the helper holds the connection they share. */
-async function reachQueen(config: Config): Promise<(labels: { agent?: string; session?: string }) => Store> {
+async function reachQueen(config: Config, quick = false): Promise<(labels: { agent?: string; session?: string }) => Store> {
   const token = readToken(config);
   const helper = await import('./helper.js');
+  // She was just found down: one short try, so each command does not wait the full time on her again.
+  if (quick) return labels => new HttpStore(config.url!, token, { ...labels, timeoutMs: 3000, retries: 0 });
   return labels => (helper.helperPlan(config.helper).enabled ? new helper.HelperStore(config.url!, token, labels) : new HttpStore(config.url!, token, labels));
 }
 
@@ -267,7 +269,8 @@ async function reachQueen(config: Config): Promise<(labels: { agent?: string; se
 async function queenStore(config: Config, fallback = true): Promise<QueueStore> {
   const labels = config.agent ? { agent: config.agent } : {};
   const { QueueStore } = await import('./queue.js');
-  return new QueueStore((await reachQueen(config))(labels), labels, config.url!, fallback);
+  const { recentlyDown } = await import('./seen.js');
+  return new QueueStore((await reachQueen(config, fallback && recentlyDown()))(labels), labels, config.url!, fallback);
 }
 
 /** The queen's hive when connected; otherwise the file on this machine. */
@@ -841,8 +844,20 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   } finally {
     store.close?.();
     if (config.url) recount();
+    // A connection to a queen that never answered can hold the process open for seconds after the answer is out.
+    if ((store as { gaveUp?: boolean }).gaveUp) leaveWhenWritten = true;
   }
   output(result);
+}
+
+/** Set when the work is done but a dead connection would keep the process waiting. */
+let leaveWhenWritten = false;
+function leave(): void {
+  if (!leaveWhenWritten) return;
+  let pending = 2;
+  const done = (): void => { if (--pending === 0) process.exit(); };
+  process.stdout.write('', done);
+  process.stderr.write('', done);
 }
 
 if (process.argv[1] && realpathSync(resolve(process.argv[1])) === fileURLToPath(import.meta.url)) {
@@ -852,5 +867,5 @@ if (process.argv[1] && realpathSync(resolve(process.argv[1])) === fileURLToPath(
     process.exitCode = 1;
     if (view.human) { process.stderr.write(`hivenote: ${e.message}\n`); remind(); return; }
     process.stderr.write(JSON.stringify({ error: { code: e.code, message: e.message, status: e.status, ...(e.details === undefined ? {} : { details: view.full ? e.details : leanDetails(e.details) }) }, ...counts() }) + '\n');
-  });
+  }).finally(leave);
 }

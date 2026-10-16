@@ -188,6 +188,7 @@ function done(command: string, receipt: Receipt, now: number): Json {
   if (command === 'edit' || command === 'replace' || command === 'describe' || command === 'restore') out.version = saved.rev;
   if (command === 'restore' && saved.status !== null) out.status = saved.status;
   if (command === 'delete') out.undo = `hivenote restore ${word(saved.name)} ${saved.rev - 1}`;
+  if (command === 'delete' && receipt.waiting?.length) out.heads_up = `${receipt.waiting.join(', ')} waited on this and no longer ${receipt.waiting.length === 1 ? 'does' : 'do'}. Check whether ${receipt.waiting.length === 1 ? 'it still makes' : 'they still make'} sense`;
   if (command === 'mark' || command === 'take') {
     out.status = saved.status;
     if (previous) out.was = previous.status;

@@ -243,7 +243,7 @@ export class SqliteStore implements Store {
     if (previous) receipt.previous = previous;
     if (takenOver) receipt.taken_over = takenOver;
     // Cancelling a task no longer holds up the tasks that wait on it; whoever cancelled it is told which, to look at them.
-    if (method === 'update_task' && p.status === 'cancelled') {
+    if ((method === 'update_task' && p.status === 'cancelled') || (method === 'delete' && note.kind === 'task')) {
       const waiting = this.all(`SELECT name FROM notes n WHERE deleted_at IS NULL AND kind='task' AND status IN ('todo','doing') AND coalesce(json_type(metadata,${AFTER_PATH}),'')='array' AND EXISTS (SELECT 1 FROM json_each(metadata,${AFTER_PATH}) a WHERE a.value=?) ORDER BY name`, note.id).map(row => row.name as string);
       if (waiting.length) receipt.waiting = waiting;
     }
