@@ -161,8 +161,11 @@ export class QueueStore implements Store {
     // The op_id (and from it a new note's id) is fixed here, so sending it later is the same write.
     const prepared = clientParams(method, params);
     const write = MUTATIONS.has(method);
+    // Whether this write itself went out to her: then it may have landed even though no answer came back.
+    let sent = false;
     // Once she could not be reached, this command does not wait on her again: every try costs a full timeout.
     if (!this.offline) {
+      sent = write;
       try {
         const answer = await this.inner.call(method, prepared);
         this.remember(method, prepared, answer);
@@ -176,7 +179,13 @@ export class QueueStore implements Store {
         this.unreachable = error;
       }
     }
-    if (write) return this.keep(method, prepared);
+    if (write) {
+      try { return await this.keep(method, prepared); } catch (error) {
+        // A refusal says nothing was changed; that is only sure when the write never went out.
+        if (sent && error instanceof HiveNoteError && error.code === 'queen_unreachable') throw maybeLanded(method, prepared);
+        throw error;
+      }
+    }
     const error = this.unreachable!;
     // A machine that has never reached her has nothing to answer from: an empty answer would hide a wrong address or a queen that is down.
     if (!this.fallback || !READS.has(method) || (!this.seen.since() && !this.mine().length)) throw new HiveNoteError(error.code, `${error.message}. ${this.fallback ? 'This needs her' : 'Waiting needs her'}; try again when she is back`, error.status);
@@ -366,7 +375,8 @@ export class QueueStore implements Store {
     return { queued: { note: target.name } };
   }
 
-  close(): void { this.seen.save(); this.inner.close?.(); }
+  // wait runs for minutes and only waits on her: saving its copy at the end would put back what others saw meanwhile.
+  close(): void { if (this.fallback) this.seen.save(); this.inner.close?.(); }
 }
 
 /** What the queen would refuse anyway is refused now, not at merge as a conflict. */
@@ -388,6 +398,16 @@ function checkKept(method: Method, p: Params): void {
     if (p.metadata !== undefined) checkMetadata(p.metadata);
   }
   if (method === 'update_task' && p.status !== undefined) checkStatus(p.status);
+}
+
+/**
+ * A write that went out and got no answer: she may have made it before the connection dropped, so the caller is
+ * told to look, not that nothing changed. Not kept either, so it is never made a second time over what she has.
+ */
+function maybeLanded(method: Method, p: Params): HiveNoteError {
+  const what = method === 'take' ? 'hivenote tasks shows whether a task is now marked doing by you'
+    : `hivenote read ${typeof p.note === 'string' ? p.note : 'NAME'} shows whether it did`;
+  return new HiveNoteError('queen_unreachable', `The queen did not answer. This ${method === 'take' ? 'take' : 'change'} went out to her and may have been made before the connection dropped: when she is back, ${what}, before trying again. It was not kept here`, 503);
 }
 
 /** Why a write could not be kept while the queen is away. */

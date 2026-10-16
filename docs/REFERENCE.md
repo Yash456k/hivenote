@@ -220,7 +220,7 @@ hivenote backup ~/hivenote-2026-10-03.db
 
 `backup` makes a consistent copy while the hive is in use, checks it, and refuses to overwrite an existing file. Backups contain the full history and the token hashes, so keep them private. To restore, stop the queen, put the backup in place of `data.db` (or point `HIVENOTE_DB` at it), and start it again.
 
-A newer HiveNote opens a database made by an older one. An older HiveNote refuses to open a database made by a newer one and leaves the file untouched. HiveNote 1.0 uses the same file as 0.5, unchanged, so you can go back to 0.5 at any time.
+A newer HiveNote opens a database made by an older one. An older HiveNote refuses to open a database made by a newer one and leaves the file untouched. HiveNote 1.0 uses the same file as 0.5, unchanged, so you can go back to 0.5 at any time. Take out a `takeover` line from `config.json` first: 0.5 refuses a config with settings it doesn't know.
 
 ## MCP
 
