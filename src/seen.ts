@@ -97,8 +97,9 @@ export class SeenCache {
       const before = data.notes[note.id];
       // Progress lines are never taken away, so lines seen earlier still hold when none came this time.
       const kept = lines.length || !before ? lines : before.updates;
-      // She says once for a whole read whether lines were left out: a note with fewer than her 20 had all of its own.
-      const more = said.more === undefined ? before?.more : said.more && (notes.length === 1 || lines.length >= 20);
+      // She says once for a whole read whether lines were left out, and an answer cut short for size can leave out
+      // lines of any note in it: each is taken to have had more, rather than be shown as complete when it may not be.
+      const more = said.more === undefined ? before?.more : said.more;
       const waits = said.waits_on === undefined ? data.briefs[note.id]?.waits_on : said.waits_on[note.name];
       this.setNote(note.id, { note, updates: kept, seen: now, ...(more ? { more } : {}) });
       this.setBrief(note.id, { ...brief(note), ...(waits?.length ? { waits_on: waits } : {}) });

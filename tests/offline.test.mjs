@@ -199,6 +199,31 @@ test('conflicts are settled only with the queen they came from, and each queen g
   assert.equal((await as(a)('resolve', 'shared', 'as', 'shared-a')).ok, 'resolved');
 });
 
+test('a task kept --after a note that became a conflict follows it to its new name', { timeout: 90_000 }, async t => {
+  const dir = await sandbox(t, 'offline-after');
+  const store = new SqliteStore(join(dir, 'queen.db'), actor());
+  t.after(() => store.close());
+  const { token } = store.tokenCreate('laptop');
+  let server = await startServer(store, { port: 0 });
+  const port = server.address().port;
+  t.after(() => (server.listening ? closeServer(server) : undefined));
+  const env = { HIVENOTE_URL: `http://127.0.0.1:${port}`, HIVENOTE_TOKEN: token, HIVENOTE_HOME: join(dir, 'worker') };
+  const answer = async (...words) => { const done = await run(process.execPath, [cli, '--agent', 'builder', ...words], { env }); return JSON.parse(done.stdout || done.stderr.trim().split('\n').at(-1)); };
+  await closeServer(server);
+  // Someone else adds build on the queen; this machine never saw it.
+  await store.call('create', params({ name: 'build', description: 'Someone else builds', content: '', kind: 'task' }));
+  // Kept in the order that used to send ship before build became a conflict.
+  await answer('task', 'ship', 'Ship it', '--after', 'build');
+  await answer('task', 'build', 'Build it');
+  server = await startServer(store, { port });
+  const merged = await answer('merge');
+  assert.deepEqual(merged.conflicts.map(item => item.note).sort(), ['build', 'ship']);
+  assert.equal((await answer('resolve', 'ship', 'as', 'ship-mine')).error.code, 'conflict');
+  await answer('resolve', 'build', 'as', 'build-mine');
+  await answer('resolve', 'ship', 'as', 'ship-mine');
+  assert.deepEqual((await store.call('read', { names: ['ship-mine'] })).waits_on, { 'ship-mine': ['build-mine'] });
+});
+
 test('a wait that loses the queen keeps asking, and wakes when she is back', { timeout: 60_000 }, async t => {
   const dir = await sandbox(t, 'offline-wait');
   const store = new SqliteStore(join(dir, 'queen.db'), actor());

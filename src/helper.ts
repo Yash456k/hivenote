@@ -7,7 +7,7 @@ import { chmodSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir, userInfo } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { clientParams, HiveNoteError, VERSION, type Method, type Params, type Store } from './contract.js';
+import { clientParams, HiveNoteError, MUTATIONS, VERSION, type Method, type Params, type Store } from './contract.js';
 import { HttpStore, warnOnOtherVersion } from './client.js';
 import { configDirectory } from './config.js';
 
@@ -97,10 +97,13 @@ function ask(path: string, message: Ask): Promise<Reply> {
   return new Promise((resolve, reject) => {
     const socket = net.connect(path);
     let text = '';
+    // Once the request is handed over, the helper may have sent it on to the queen even if no answer comes back.
+    let handed = false;
+    reject = (original => (error: Error) => original(Object.assign(error, { handed })))(reject);
     // The helper retries a busy or unreachable queen itself; past this it is stuck.
     const timer = setTimeout(() => { socket.destroy(new Error('helper timed out')); }, 45000);
     socket.setEncoding('utf8');
-    socket.once('connect', () => { socket.write(JSON.stringify(message) + '\n'); });
+    socket.once('connect', () => { handed = true; socket.write(JSON.stringify(message) + '\n'); });
     socket.on('data', (chunk: string) => { text += chunk; if (text.length > LIMIT) socket.destroy(new Error('helper answer too large')); });
     socket.once('error', error => { clearTimeout(timer); reject(error); });
     socket.once('end', () => {
@@ -139,10 +142,16 @@ export class HelperStore implements Store {
     let reply: Reply;
     try {
       reply = await ask(this.path, { key: this.key, method, params: prepared, ...this.labels });
-      if (reply.error?.code === 'helper_refused') throw new Error('helper refused');
-    } catch {
+      if (reply.error?.code === 'helper_refused') throw Object.assign(new Error('helper refused'), { handed: false });
+    } catch (error) {
       start();
-      return this.direct.call(method, prepared);
+      // The helper had the write and gave no answer: it may have reached the queen, so a direct try that can't
+      // connect must not say that nothing went out.
+      if (!(error as { handed?: boolean }).handed || !MUTATIONS.has(method)) return this.direct.call(method, prepared);
+      try { return await this.direct.call(method, prepared); } catch (direct) {
+        if (direct instanceof HiveNoteError && direct.code === 'transport_error') throw new HiveNoteError(direct.code, direct.message, direct.status);
+        throw direct;
+      }
     }
     if (reply.version && !this.versionChecked) {
       this.versionChecked = true;
