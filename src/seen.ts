@@ -14,7 +14,9 @@ interface Seen {
   queen: string;
   /** When the queen last answered. */
   at: string;
-  notes: Record<string, { note: Note; updates: Event[]; seen: string }>;
+  /** more: she had older progress lines than the ones kept here. */
+  notes: Record<string, { note: Note; updates: Event[]; seen: string; more?: boolean }>;
+  /** A task's entry carries waits_on: the unfinished tasks it waited on, by name, as she last said. */
   briefs: Record<string, BriefNote>;
 }
 
@@ -79,8 +81,12 @@ export class SeenCache {
   /** When she last answered; empty when never. */
   since(): string { return this.get().at; }
 
-  /** Whole notes, from a read or a write's answer, with the progress lines that came with them. */
-  saw(notes: Note[], updates: Event[] = []): void {
+  /**
+   * Whole notes, from a read or a write's answer, with the progress lines that came with them.
+   * A read also says what each task waits on (waits_on, by note name) and whether older lines were left out (more);
+   * what an answer does not say is kept as it was.
+   */
+  saw(notes: Note[], updates: Event[] = [], said: { waits_on?: Record<string, string[]>; more?: boolean } = {}): void {
     const data = this.get();
     const now = new Date().toISOString();
     for (const note of notes) {
@@ -90,18 +96,33 @@ export class SeenCache {
       const lines = updates.filter(update => update.note_id === note.id && update.body !== null);
       const before = data.notes[note.id];
       // Progress lines are never taken away, so lines seen earlier still hold when none came this time.
-      this.setNote(note.id, { note, updates: lines.length || !before ? lines : before.updates, seen: now });
-      this.setBrief(note.id, brief(note));
+      const kept = lines.length || !before ? lines : before.updates;
+      // She says once for a whole read whether lines were left out: a note with fewer than her 20 had all of its own.
+      const more = said.more === undefined ? before?.more : said.more && (notes.length === 1 || lines.length >= 20);
+      const waits = said.waits_on === undefined ? data.briefs[note.id]?.waits_on : said.waits_on[note.name];
+      this.setNote(note.id, { note, updates: kept, seen: now, ...(more ? { more } : {}) });
+      this.setBrief(note.id, { ...brief(note), ...(waits?.length ? { waits_on: waits } : {}) });
     }
   }
 
-  /** Names and descriptions, from a listing or a search. */
-  listed(entries: (BriefNote & { snippet?: unknown })[]): void {
+  /** A progress line this machine added while she was up: her answer to it carries the note, not the line. */
+  addLine(event: Event): void {
+    const entry = this.get().notes[event.note_id];
+    if (!entry || entry.updates.some(update => update.op_id === event.op_id)) return;
+    this.setNote(event.note_id, { ...entry, updates: [...entry.updates, event] });
+  }
+
+  /** Whether she had older progress lines for this note than the ones kept here. */
+  moreOf(id: string): boolean { return this.get().notes[id]?.more === true; }
+
+  /** Names and descriptions, from a listing or a search. A search does not say what a task waits on; a listing does. */
+  listed(entries: (BriefNote & { snippet?: unknown })[], search = false): void {
     const data = this.get();
     for (const { snippet: _snippet, ...entry } of entries) {
       if (typeof entry.id !== 'string') continue;
       this.forgetName(entry.name, entry.id);
-      this.setBrief(entry.id, entry);
+      const waits = search ? data.briefs[entry.id]?.waits_on : undefined;
+      this.setBrief(entry.id, waits?.length && entry.waits_on === undefined ? { ...entry, waits_on: waits } : entry);
       // A note that changed since it was read is no longer known whole: its old text under maybe an old name would
       // be answered as if it were current, and a write by that name could land on the wrong note.
       const whole = data.notes[entry.id];

@@ -118,6 +118,87 @@ test('merge sends kept writes only to the queen they were kept for, and to the n
   assert.deepEqual(progress, ['Found the cause']);
 });
 
+test('a note kept here is changed only here, and one that may have reached her is not called gone', { timeout: 90_000 }, async t => {
+  const dir = await sandbox(t, 'offline-own');
+  const store = new SqliteStore(join(dir, 'queen.db'), actor());
+  t.after(() => store.close());
+  const { token } = store.tokenCreate('laptop');
+  let server = await startServer(store, { port: 0 });
+  const port = server.address().port;
+  t.after(() => (server.listening ? closeServer(server) : undefined));
+  const env = { HIVENOTE_URL: `http://127.0.0.1:${port}`, HIVENOTE_TOKEN: token, HIVENOTE_HOME: join(dir, 'worker') };
+  const answer = async (...words) => { const done = await run(process.execPath, [cli, '--agent', 'builder', ...words], { env }); return JSON.parse(done.stdout || done.stderr.trim().split('\n').at(-1)); };
+  await answer('list');
+
+  // A refused connection carried nothing: the agent is told nothing changed, not to go and check.
+  await closeServer(server);
+  await store.call('create', params({ name: 'contract', description: 'Hers', content: 'POST' }));
+  assert.match((await answer('edit', 'contract', 'POST', 'PUT')).error.message, /Nothing was changed/u);
+
+  // Kept here; meanwhile someone else takes the name on the queen. Changes by that name stay with the kept note.
+  await answer('add', 'plan', 'Mine', 'step one');
+  server = await startServer(store, { port });
+  await store.call('create', params({ name: 'plan', description: 'Theirs', content: 'their plan' }));
+  assert.equal((await answer('append', 'plan', 'my progress')).ok, 'queued');
+  assert.equal((await answer('replace', 'plan', 'step two')).ok, 'queued');
+  const [theirs] = (await store.call('read', { names: ['plan'] })).notes;
+  assert.equal(theirs.content, 'their plan');
+  assert.equal((await store.call('history', { note: 'plan' })).total, 1);
+
+  // An add whose answer was lost may be on her: deleting it here would leave hers, so it is refused.
+  await closeServer(server);
+  await answer('list');
+  server = await startServer(store, { port, dropResponseOnce: true });
+  assert.equal((await answer('add', 'ghost', 'Saved?', 'text')).ok, 'queued');
+  assert.equal((await store.call('read', { names: ['ghost'] })).notes.length, 1);
+  await closeServer(server);
+  assert.equal((await answer('delete', 'ghost')).error.code, 'conflict');
+  server = await startServer(store, { port });
+  const merged = await answer('merge');
+  // ghost is answered from her receipt and made once; plan is a conflict, with its progress line held beside it.
+  assert.equal(merged.applied + merged.already, 1);
+  assert.deepEqual(merged.conflicts.map(item => item.note), ['plan']);
+  assert.deepEqual((await answer('conflicts')).conflicts[0].progress, ['my progress']);
+  assert.equal((await answer('delete', 'ghost')).ok, 'deleted');
+});
+
+test('conflicts are settled only with the queen they came from, and each queen gets her own kept writes', { timeout: 90_000 }, async t => {
+  const dir = await sandbox(t, 'offline-two');
+  const open = async name => {
+    const store = new SqliteStore(join(dir, `${name}.db`), actor());
+    const { token } = store.tokenCreate('laptop');
+    let server = await startServer(store, { port: 0 });
+    const port = server.address().port;
+    t.after(async () => { if (server.listening) await closeServer(server); store.close(); });
+    return { store, token, url: `http://127.0.0.1:${port}`, down: () => closeServer(server), up: async () => { server = await startServer(store, { port }); } };
+  };
+  const a = await open('a'), b = await open('b');
+  const home = join(dir, 'worker');
+  const as = queen => async (...words) => { const done = await run(process.execPath, [cli, '--agent', 'traveller', ...words], { env: { HIVENOTE_URL: queen.url, HIVENOTE_TOKEN: queen.token, HIVENOTE_HOME: home } }); return JSON.parse(done.stdout || done.stderr.trim().split('\n').at(-1)); };
+  await as(a)('list');
+  await a.down();
+  await as(a)('add', 'shared', 'Private to A', 'A text');
+  await as(a)('add', 'for-a', 'A', 'A');
+  await as(b)('list');
+  await b.down();
+  await as(b)('add', 'for-b', 'B', 'B');
+  await a.up(); await b.up();
+  await a.store.call('create', params({ name: 'shared', description: 'Taken on A', content: 'x' }));
+  await b.store.call('create', params({ name: 'shared', description: 'Unrelated on B', content: 'y' }));
+
+  // Each merge sends only what was kept for that queen.
+  const onA = await as(a)('merge');
+  assert.deepEqual([onA.applied, onA.kept_for_other_queens, onA.conflicts.map(item => item.note)], [1, 1, ['shared']]);
+  assert.equal((await as(b)('merge')).applied, 1);
+  assert.deepEqual([(await a.store.call('read', { names: ['for-a', 'for-b'] })).missing, (await b.store.call('read', { names: ['for-a', 'for-b'] })).missing], [['for-b'], ['for-a']]);
+
+  // A's conflict can't be settled into B's note of the same name.
+  assert.equal((await as(b)('resolve', 'shared', 'append')).error.code, 'other_queen');
+  assert.equal((await b.store.call('history', { note: 'shared' })).total, 1);
+  assert.equal((await as(b)('conflicts')).total, 0);
+  assert.equal((await as(a)('resolve', 'shared', 'as', 'shared-a')).ok, 'resolved');
+});
+
 test('a wait that loses the queen keeps asking, and wakes when she is back', { timeout: 60_000 }, async t => {
   const dir = await sandbox(t, 'offline-wait');
   const store = new SqliteStore(join(dir, 'queen.db'), actor());

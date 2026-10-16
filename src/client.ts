@@ -75,14 +75,19 @@ export class HttpStore implements Store {
     const retries = held === undefined ? this.retries : 0;
     // "Busy" means another writer holds the hive for a moment; keep trying for a few seconds.
     const busyUntil = Date.now() + 5000;
+    // Whether any try may have reached her: a write that did may have been made even though no answer came back.
+    let maybeSent = false;
+    const unreachable = (message: string): HiveNoteError => new HiveNoteError('transport_error', message, 503, maybeSent ? undefined : { sent: false });
     for (let attempt = 0; ; attempt++) {
       let response: Response;
       try {
         response = await this.send(this.endpoint, { method: 'POST', redirect: 'error', headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}` }, body, signal: AbortSignal.timeout(timeoutMs) });
-      } catch {
+      } catch (error) {
+        if (!neverConnected(error)) maybeSent = true;
         if (attempt < retries) { await pause(attempt); continue; }
-        throw new HiveNoteError('transport_error', 'Unable to reach HiveNote server', 503);
+        throw unreachable('Unable to reach HiveNote server');
       }
+      maybeSent = true;
       this.serverVersion = response.headers.get('x-hivenote-version') ?? this.serverVersion;
       if (!this.quiet && !this.versionChecked && this.serverVersion) {
         this.versionChecked = true;
@@ -125,6 +130,21 @@ function tooOld(method: Method, params: Params, error: Record<string, unknown> |
   const message = typeof error?.message === 'string' ? error.message : '';
   if (method === 'take' && error?.code === 'invalid_request' && message.startsWith('Expected {method')) return true;
   return error?.code === 'validation_error' && message.startsWith('Unknown parameter') && NEWER_PARAMS.some(key => params[key] !== undefined);
+}
+/**
+ * Whether a failed request certainly never reached the queen: the connection itself was refused or could not be
+ * opened. A timeout or a dropped connection may have come after she read the request, so those count as sent.
+ */
+const NOT_CONNECTED = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'EADDRNOTAVAIL', 'UND_ERR_CONNECT_TIMEOUT']);
+function neverConnected(error: unknown): boolean {
+  const codes = (value: unknown, depth = 0): string[] => {
+    if (!value || typeof value !== 'object' || depth > 4) return [];
+    const own = typeof (value as { code?: unknown }).code === 'string' ? [(value as { code: string }).code] : [];
+    const inner = (value as { errors?: unknown }).errors;
+    return [...own, ...codes((value as { cause?: unknown }).cause, depth + 1), ...(Array.isArray(inner) ? inner.flatMap(item => codes(item, depth + 1)) : [])];
+  };
+  const found = codes(error);
+  return found.length > 0 && found.every(code => NOT_CONNECTED.has(code));
 }
 function pause(attempt: number): Promise<void> { return new Promise(resolve => setTimeout(resolve, Math.min(100 * 2 ** attempt, 1000))); }
 export { clientParams, HiveNoteError } from './contract.js';
