@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync, writeSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -43,6 +43,8 @@ export interface Conflict {
   name: string;
   /** The id the note was kept under, so progress kept for it later joins this conflict. */
   id?: string;
+  /** This conflict's own identity, fixed when it is made: resolve's op_ids come from it. */
+  key?: string;
   /** The queen it was kept for: it is settled only with her. */
   queen?: string;
   /** For a note made here, what it was made with. */
@@ -531,7 +533,7 @@ function originKnown(conflict: Conflict, queen: string | undefined): boolean { r
  * after the tasks made here that it waits on, so it never waits on someone else's task by the same name. Otherwise
  * oldest first.
  */
-function inOrder(left: Entry[]): { order: Entry[]; loop: Set<Entry> } {
+function inOrder(left: Entry[]): { order: Entry[]; loop: Set<Entry>; loopBack: (entry: Entry, name: string) => boolean } {
   const byId = new Map<string, Entry>(), byName = new Map<string, Entry>();
   for (const entry of left) if (entry.method === 'create' && entry.unreadable === undefined) { byId.set(`${entry.queen}\n${String(entry.params.id)}`, entry); byName.set(`${entry.queen}\n${entry.name}`, entry); }
   const needs = new Map<Entry, Entry[]>(left.map(entry => {
@@ -554,7 +556,12 @@ function inOrder(left: Entry[]): { order: Entry[]; loop: Set<Entry> } {
     const members = left.filter(entry => !done.has(entry) && reaches(entry, entry));
     for (const entry of members.length ? members : [left.find(entry => !done.has(entry))!]) { done.add(entry); out.push(entry); loop.add(entry); }
   }
-  return { order: out, loop };
+  // Whether the kept task this one waits on, by name, waits back on it in turn.
+  const loopBack = (entry: Entry, name: string): boolean => {
+    const other = byName.get(`${entry.queen}\n${name}`);
+    return other !== undefined && other !== entry && (other === entry || reaches(other, entry));
+  };
+  return { order: out, loop, loopBack };
 }
 
 /**
@@ -585,16 +592,16 @@ export async function mergeKept(address: string, reach: (labels: Labels) => Stor
     const settle = (entry: Entry): void => { left = left.filter(other => other !== entry); save(path, left); };
     const conflictFor = async (entry: Entry, why: string, code: string): Promise<void> => {
       const id = String(entry.params.id ?? '');
+      const key = randomUUID();
       const conflict: Conflict = entry.method === 'create'
-        ? { kind: entry.params.kind === 'task' ? 'task' : 'note', name: entry.name, id, queen, params: entry.params, progress: [], ...labelsOf(entry), why, code }
-        : { kind: 'progress', name: entry.name, id, queen, progress: [String(entry.params.body)], ...labelsOf(entry), why, code };
+        ? { kind: entry.params.kind === 'task' ? 'task' : 'note', name: entry.name, id, key, queen, params: entry.params, progress: [], ...labelsOf(entry), why, code }
+        : { kind: 'progress', name: entry.name, id, key, queen, progress: [String(entry.params.body)], ...labelsOf(entry), why, code };
       await addConflict(conflict);
       // Later progress for the same note joins this one, whether the note was made here or is one she deleted.
       held.set(id, conflict);
       report.push({ note: entry.name, kind: conflict.kind, by: entry.agent ?? HERE, why });
     };
-    const { order, loop } = inOrder(left);
-    const loopNames = new Set([...loop].map(entry => entry.name));
+    const { order, loop, loopBack } = inOrder(left);
     for (const entry of order) {
       const id = String(entry.params.id ?? '');
       if (entry.unreadable !== undefined) {
@@ -609,9 +616,9 @@ export async function mergeKept(address: string, reach: (labels: Labels) => Stor
       if (loop.has(entry) && entry.method === 'create') {
         // The waits that make the loop are taken out of what is kept, so it can be settled; the rest stay.
         const after = Array.isArray(entry.params.after) ? (entry.params.after as unknown[]).map(String) : [];
-        const dropped = after.filter(name => loopNames.has(name));
+        const dropped = after.filter(name => loopBack(entry, name));
         const { after: _after, ...rest } = entry.params;
-        const kept = after.filter(name => !loopNames.has(name));
+        const kept = after.filter(name => !dropped.includes(name));
         entry.params = kept.length ? { ...rest, after: kept } : rest;
         await conflictFor(entry, `It was kept waiting on ${dropped.map(name => `'${name}'`).join(', ')}, added here too, which ${dropped.length === 1 ? 'waits' : 'wait'} on it in turn. The queen allows no such loop, so that wait was taken out: settle this, then add it back with hivenote after if it still makes sense`, 'waits_in_loop');
         settle(entry);
@@ -682,7 +689,7 @@ function addLineToConflict(conflict: Conflict, line: string): Promise<Conflict> 
     let now: Conflict;
     if (at >= 0) { now = { ...all[at]!, progress: [...all[at]!.progress, line] }; all[at] = now; }
     else {
-      now = { kind: 'progress', name: conflict.name, ...(conflict.id ? { id: conflict.id } : {}), ...(conflict.queen ? { queen: conflict.queen } : {}), progress: [line], ...labelsOf(conflict), why: `Its note's conflict was settled while this merge ran, so this progress line is kept on its own`, code: 'settled_meanwhile' };
+      now = { kind: 'progress', name: conflict.name, ...(conflict.id ? { id: conflict.id } : {}), key: randomUUID(), ...(conflict.queen ? { queen: conflict.queen } : {}), progress: [line], ...labelsOf(conflict), why: `Its note's conflict was settled while this merge ran, so this progress line is kept on its own`, code: 'settled_meanwhile' };
       all.push(now);
     }
     saveConflicts(all);
@@ -764,23 +771,24 @@ export async function resolveConflict(store: Store, name: string, how: 'as' | 'a
     // part way makes nothing twice: what she has is answered from her receipts.
     // The seed is what stays the same for this conflict however it grows: more progress lines joining it, or what a
     // task waits on renamed, must not give a step already made a new op_id.
-    const identity = conflict.id ? [conflict.id, conflict.queen ?? '', conflict.params === undefined, conflict.params?.op_id ?? ''] : [conflict.name, conflict.params ?? null];
+    // A conflict from before keys were kept is seeded by what it held, as it was then.
+    const identity = conflict.key ?? JSON.stringify([conflict.name, conflict.params ?? null, conflict.progress]);
     const seed = createHash('sha256').update(JSON.stringify([identity, how, newName ?? ''])).digest('hex');
     const op = (step: number): string => `resolve-${seed.slice(0, 32)}-${step}`;
     // A step she already has under its op_id is one this resolve made before it stopped: it is not made again.
-    const send = async (method: Method, params: Params): Promise<void> => {
-      try { await sendTo(method, params); } catch (error) {
+    const send = async (method: Method, params: Params): Promise<unknown> => {
+      try { return await sendTo(method, params); } catch (error) {
         if (!(error instanceof HiveNoteError && error.code === 'op_id_conflict')) throw error;
+        return undefined;
       }
     };
     if (how === 'as') {
-      if (conflict.params) {
-        const { id: _id, op_id: _op, ...params } = conflict.params;
-        await send('create', { ...params, name: newName, op_id: op(0) });
-      } else {
-        await send('create', { name: newName, description: `Progress kept for '${name}' while the queen was away`, content: '', op_id: op(0) });
-      }
-      for (const [i, body] of conflict.progress.entries()) await send('append', { note: newName, body, op_id: op(i + 1) });
+      const { id: _id, op_id: _op, ...made } = conflict.params ?? { description: `Progress kept for '${name}' while the queen was away`, content: '' };
+      const create = clientParams('create', { ...made, name: newName, op_id: op(0) });
+      const made_ = await send('create', create) as { note?: { id?: string } } | undefined;
+      // The progress goes to the note just made, by its id: by name, a retry could find someone else's note there.
+      const target = made_?.note?.id ?? String(create.id);
+      for (const [i, body] of conflict.progress.entries()) await send('append', { id: target, body, op_id: op(i + 1) });
       answer = { ...answer, note: newName, was: name };
     } else if (how === 'append') {
       const parts: string[] = [];

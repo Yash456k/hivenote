@@ -95,7 +95,9 @@ export class HttpStore implements Store {
         this.versionChecked = true;
         warnOnOtherVersion(this.serverVersion, new URL(this.endpoint).origin);
       }
-      if (response.status === 503 && (attempt < retries || Date.now() < busyUntil)) { await response.body?.cancel(); await pause(attempt); continue; }
+      // A 503 is the queen busy, or a tunnel's error page sent after she may have made it: a later refusal of this
+      // write then says nothing about whether that try landed.
+      if (response.status === 503 && (attempt < retries || Date.now() < busyUntil)) { earlier = true; await response.body?.cancel(); await pause(attempt); continue; }
       let payload: unknown;
       try { payload = await response.json(); } catch (error) {
         // A truncated connection after headers is still a transport failure.
