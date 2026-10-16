@@ -212,7 +212,11 @@ export class QueueStore implements Store {
       const names = (p.names as string[] | undefined) ?? [];
       const notes = names.flatMap(name => whole.filter(note => note.name === name).slice(0, 1));
       const missing = names.filter(name => !notes.some(note => note.name === name));
-      return { notes, missing, updates: notes.flatMap(updatesOf), updates_has_more: false, ...offline };
+      // Listed while she was up, but never read here: the name is known, the text is not.
+      const listedOnly = missing.filter(name => this.seen.briefs().some(entry => entry.name === name));
+      if (listedOnly.length && !notes.length) throw new HiveNoteError('queen_unreachable', `The queen can't be reached, and this machine only listed ${listedOnly.map(name => `'${name}'`).join(', ')}, never read ${listedOnly.length === 1 ? 'its' : 'their'} text. Read ${listedOnly.length === 1 ? 'it' : 'them'} when she is back`, 503);
+      const unread = listedOnly.length ? { heads_up: `${offline.offline.heads_up}. Never read on this machine, so not shown: ${listedOnly.join(', ')}` } : {};
+      return { notes, missing, updates: notes.flatMap(updatesOf), updates_has_more: false, offline: { ...offline.offline, ...unread } };
     }
     const wholeIds = new Set(whole.map(note => note.id));
     let briefs: (BriefNote & { snippet?: string })[] = [...whole.map(brief), ...this.seen.briefs().filter(entry => !wholeIds.has(entry.id))];
