@@ -167,7 +167,8 @@ export class QueueStore implements Store {
     // Whether this write itself went out to her: then it may have landed even though no answer came back.
     let sent = false;
     // Once she could not be reached, this command does not wait on her again: every try costs a full timeout.
-    if (!this.offline) {
+    // Not for wait, which is there to keep asking until she is back.
+    if (!this.offline || !this.fallback) {
       sent = write;
       try {
         const answer = await this.inner.call(method, prepared);

@@ -118,6 +118,28 @@ test('merge sends kept writes only to the queen they were kept for, and to the n
   assert.deepEqual(progress, ['Found the cause']);
 });
 
+test('a wait that loses the queen keeps asking, and wakes when she is back', { timeout: 60_000 }, async t => {
+  const dir = await sandbox(t, 'offline-wait');
+  const store = new SqliteStore(join(dir, 'queen.db'), actor());
+  t.after(() => store.close());
+  const { token } = store.tokenCreate('laptop');
+  let server = await startServer(store, { port: 0 });
+  const port = server.address().port;
+  t.after(() => (server.listening ? closeServer(server) : undefined));
+  await store.call('create', params({ name: 'ship-it', description: 'Ship it', content: '', kind: 'task' }));
+  const env = { HIVENOTE_URL: `http://127.0.0.1:${port}`, HIVENOTE_TOKEN: token, HIVENOTE_HOME: join(dir, 'worker') };
+  await run(process.execPath, [cli, 'list'], { env });
+  const waiting = run(process.execPath, [cli, 'wait', 'ship-it', 'done', '40s'], { env });
+  await new Promise(resolve => setTimeout(resolve, 800));
+  await closeServer(server);
+  await new Promise(resolve => setTimeout(resolve, 3000));
+  server = await startServer(store, { port });
+  await store.call('update_task', params({ note: 'ship-it', status: 'done' }));
+  const result = await waiting;
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).note.status, 'done');
+});
+
 test('a hive made by 0.5.0 opens as it is, with nothing to upgrade', async t => {
   const dir = await sandbox(t, 'v05');
   const path = join(dir, 'data.db');

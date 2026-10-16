@@ -434,8 +434,15 @@ const NOTES: Record<string, { usage: string; min: number; max: number; run: Run 
     run: async (names, store) => {
       sinceAtTerminal();
       // Asked first, so a change landing between the two calls is shown twice, never missed.
-      const feed = view.since === undefined || view.human ? undefined : await changesSince(store, view.since);
-      const result = await store.call('read', { names }) as { notes: { id: string }[]; missing: string[]; seq?: number };
+      let feed: Feed | undefined;
+      try {
+        feed = view.since === undefined || view.human ? undefined : await changesSince(store, view.since);
+      } catch (error) {
+        // Without the queen there is no feed to compare with: the notes as last seen are answered, marked offline.
+        if (!(error instanceof HiveNoteError && error.code === 'transport_error')) throw error;
+      }
+      const result = await store.call('read', { names }) as { notes: { id: string }[]; missing: string[]; seq?: number; offline?: unknown };
+      if (result.offline) feed = undefined;
       if (!result.notes.length) throw new HiveNoteError('not_found', `No note named ${result.missing.map(name => `'${name}'`).join(', ')}`, 404);
       notAhead(result.seq);
       return feed ? { ...result, ...await news(store, result.notes, feed) } : result;
