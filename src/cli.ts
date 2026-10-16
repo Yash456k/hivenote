@@ -112,8 +112,10 @@ function recount(): void { view.kept = kept(); view.conflicts = conflictCount();
 
 function output(value: unknown): void {
   if (isQueued(value)) {
-    if (view.human) { process.stdout.write("Kept here: the queen can't be reached.\n"); remind(); }
-    else process.stdout.write(JSON.stringify({ ok: 'queued', note: value.queued.note, kept: view.kept, heads_up: KEPT }) + '\n');
+    // A note made here and deleted before a merge never reaches her: it is simply gone.
+    const gone = value.queued.dropped === true;
+    if (view.human) { process.stdout.write(gone ? `Deleted ${value.queued.note}: it was only on this machine.\n` : "Kept here: the queen can't be reached.\n"); remind(); }
+    else process.stdout.write(JSON.stringify(gone ? { ok: 'deleted', note: value.queued.note, kept: view.kept, heads_up: 'It was only on this machine, waiting for a merge, so it is gone and nothing reaches the queen' } : { ok: 'queued', note: value.queued.note, kept: view.kept, heads_up: KEPT }) + '\n');
     return;
   }
   if (view.human) {

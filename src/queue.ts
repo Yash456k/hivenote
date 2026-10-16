@@ -44,7 +44,7 @@ export interface Conflict {
 }
 
 /** What a command gets back for a write that was kept. */
-export interface Queued { queued: { note: string } }
+export interface Queued { queued: { note: string; dropped?: true } }
 export function isQueued(value: unknown): value is Queued {
   return typeof value === 'object' && value !== null && 'queued' in value && typeof (value as Queued).queued?.note === 'string';
 }
@@ -376,7 +376,7 @@ export class QueueStore implements Store {
       case 'delete':
         // Nobody else has it, so it simply goes, with its progress.
         save(this.path, all.filter(entry => entry.params.id !== params.id));
-        return { queued: { note: target.name } };
+        return { queued: { note: target.name, dropped: true } };
       default:
         throw refused(method, p);
     }
