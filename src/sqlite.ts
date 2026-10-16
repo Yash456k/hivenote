@@ -6,7 +6,7 @@ import { age, byline, clientParams, isMethod, MUTATIONS, HiveNoteError, type Act
 import { openDatabase, storageError, transaction } from './database.js';
 import { held, HOLD_LIMIT_MS } from './wait.js';
 import { due, id, integer, invalid, json, LIMITS, metadata, params as checkParams, status, STATUSES, text } from './validate.js';
-import { afterIds, JSON_COLUMNS, NOTE_COLUMNS, toEvent, toNote, view, type Row } from './views.js';
+import { AFTER_KEY, AFTER_PATH, afterIds, withAfter, JSON_COLUMNS, NOTE_COLUMNS, toEvent, toNote, view, type Row } from './views.js';
 
 export type { BriefNote } from './views.js';
 
@@ -32,7 +32,10 @@ const PARAMETERS: Record<Method, readonly string[]> = {
  * A task (as `n`) that waits on a live task that is not done. A deleted task is no longer waited on,
  * and restoring it brings the wait back, since the id stays in the waiting task's metadata.
  */
-const BLOCKED = `(coalesce(json_type(n.metadata,'$.after'),'')='array' AND EXISTS (SELECT 1 FROM json_each(n.metadata,'$.after') a JOIN notes p ON p.id=a.value AND p.deleted_at IS NULL WHERE p.status NOT IN ('done','cancelled')))`;
+const BLOCKED = `(coalesce(json_type(n.metadata,${AFTER_PATH}),'')='array' AND EXISTS (SELECT 1 FROM json_each(n.metadata,${AFTER_PATH}) a JOIN notes p ON p.id=a.value AND p.deleted_at IS NULL WHERE p.status NOT IN ('done','cancelled')))`;
+
+/** When a task was added: its latest create, so one added under a deleted task's name is not put at the old one's place. */
+const ADDED = `(SELECT max(seq) FROM events e WHERE e.note_id=n.id AND e.kind='create')`;
 
 /** How long a doing task can go idle before another agent may take it over: off unless the hive's config.json sets takeover. */
 export const TAKEOVER_MS = 0;
@@ -172,6 +175,8 @@ export class SqliteStore implements Store {
       if (gone) {
         const before = toNote(gone);
         Object.assign(note, { id: before.id, rev: before.rev + 1, created_at: before.created_at });
+        // A new note under a deleted one's name is a new thing: tasks that waited on the deleted one don't wait on it.
+        this.forgetWaitsOn(before.id);
       }
       if (p.after !== undefined) {
         if (note.kind !== 'task') invalid('Only a task can wait on other tasks');
@@ -239,7 +244,7 @@ export class SqliteStore implements Store {
     if (takenOver) receipt.taken_over = takenOver;
     // Cancelling a task no longer holds up the tasks that wait on it; whoever cancelled it is told which, to look at them.
     if (method === 'update_task' && p.status === 'cancelled') {
-      const waiting = this.all(`SELECT name FROM notes n WHERE deleted_at IS NULL AND kind='task' AND status IN ('todo','doing') AND coalesce(json_type(metadata,'$.after'),'')='array' AND EXISTS (SELECT 1 FROM json_each(metadata,'$.after') a WHERE a.value=?) ORDER BY name`, note.id).map(row => row.name as string);
+      const waiting = this.all(`SELECT name FROM notes n WHERE deleted_at IS NULL AND kind='task' AND status IN ('todo','doing') AND coalesce(json_type(metadata,${AFTER_PATH}),'')='array' AND EXISTS (SELECT 1 FROM json_each(metadata,${AFTER_PATH}) a WHERE a.value=?) ORDER BY name`, note.id).map(row => row.name as string);
       if (waiting.length) receipt.waiting = waiting;
     }
     if (p.after !== undefined || p.not_after !== undefined) receipt.after = this.afterNames(note);
@@ -271,8 +276,16 @@ export class SqliteStore implements Store {
         if (!after.includes(other.id)) after.push(other.id);
       }
     }
-    const { after: _before, ...rest } = task.metadata;
-    task.metadata = metadata(after.length ? { ...rest, after } : rest);
+    task.metadata = metadata(withAfter(task.metadata, after));
+  }
+
+  /** Tasks that waited on this id no longer do. Not a new revision of them: the link pointed at something gone. */
+  private forgetWaitsOn(id: string): void {
+    const rows = this.all(`SELECT id,metadata FROM notes n WHERE coalesce(json_type(metadata,${AFTER_PATH}),'')='array' AND EXISTS (SELECT 1 FROM json_each(metadata,${AFTER_PATH}) a WHERE a.value=?)`, id);
+    for (const row of rows) {
+      const meta = JSON.parse(row.metadata as string) as Record<string, unknown>;
+      this.run('UPDATE notes SET metadata=? WHERE id=?', JSON.stringify(withAfter(meta, afterIds({ metadata: meta }).filter(other => other !== id))), row.id as string);
+    }
   }
 
   /** Whether the task `from` waits on `target`, directly or through the tasks it waits on. */
@@ -301,13 +314,14 @@ export class SqliteStore implements Store {
   /** For each task given that still waits on others, the names of those that are not done. */
   private waitsOn(notes: Note[]): Map<string, string[]> {
     const waiting = new Map<string, string[]>();
+    const ids = [...new Set(notes.filter(note => note.kind === 'task').flatMap(afterIds))];
+    if (!ids.length) return waiting;
+    // One query for every task they wait on, however many tasks are on the page.
+    const open = new Map(this.all(`SELECT id,name FROM notes WHERE deleted_at IS NULL AND status NOT IN ('done','cancelled') AND id IN (SELECT value FROM json_each(?))`, JSON.stringify(ids)).map(row => [row.id as string, row.name as string]));
     for (const note of notes) {
-      if (note.kind !== 'task' || !afterIds(note).length) continue;
-      const open = afterIds(note).flatMap(id => {
-        const row = this.get("SELECT name FROM notes WHERE id=? AND deleted_at IS NULL AND status NOT IN ('done','cancelled')", id);
-        return row ? [row.name as string] : [];
-      });
-      if (open.length) waiting.set(note.id, open);
+      if (note.kind !== 'task') continue;
+      const names = afterIds(note).flatMap(id => (open.has(id) ? [open.get(id)!] : []));
+      if (names.length) waiting.set(note.id, names);
     }
     return waiting;
   }
@@ -317,7 +331,7 @@ export class SqliteStore implements Store {
    * been idle longest past the takeover time. Picked inside the write, so agents asking at once each get another.
    */
   private next(now: string): Note {
-    const ready = this.get(`SELECT * FROM notes n WHERE deleted_at IS NULL AND kind='task' AND status='todo' AND NOT ${BLOCKED} ORDER BY created_at,rowid LIMIT 1`);
+    const ready = this.get(`SELECT * FROM notes n WHERE deleted_at IS NULL AND kind='task' AND status='todo' AND NOT ${BLOCKED} ORDER BY ${ADDED},rowid LIMIT 1`);
     if (ready) return toNote(ready);
     if (this.takeoverMs > 0) {
       const idle = this.get(`SELECT * FROM notes n WHERE deleted_at IS NULL AND kind='task' AND status='doing' AND activity_at<=? AND NOT ${BLOCKED} ORDER BY activity_at,rowid LIMIT 1`, new Date(Date.parse(now) - this.takeoverMs).toISOString());
@@ -348,7 +362,8 @@ export class SqliteStore implements Store {
   /** Bring back an old revision as a new one. Never revives a stale claim. */
   private restored(note: Note, rev: unknown): Note {
     const old = this.historical(note, rev);
-    return { ...old, rev: note.rev, created_at: note.created_at, deleted_at: null, claimed_by: null, claim_expires_at: null };
+    // What a task waits on changes only through after and not_after, which check for loops; a restore keeps it as it is now.
+    return { ...old, metadata: withAfter(old.metadata ?? {}, afterIds(note)), rev: note.rev, created_at: note.created_at, deleted_at: null, claimed_by: null, claim_expires_at: null };
   }
 
 
@@ -482,7 +497,7 @@ export class SqliteStore implements Store {
     }
     const clause = where.join(' AND ');
     const total = Number(this.get(`SELECT count(*) AS n FROM notes n WHERE ${clause}`, ...args)?.n);
-    const found = this.all(`SELECT * FROM notes n WHERE ${clause} ORDER BY ${p.ready ? 'created_at,rowid' : 'name,id'} LIMIT ? OFFSET ?`, ...args, limit, offset).map(toNote);
+    const found = this.all(`SELECT * FROM notes n WHERE ${clause} ORDER BY ${p.ready ? `${ADDED},rowid` : 'name,id'} LIMIT ? OFFSET ?`, ...args, limit, offset).map(toNote);
     const waiting = this.waitsOn(found);
     const notes = found.map(note => {
       const entry = shape(note);
@@ -678,7 +693,7 @@ function createNote(p: Params, who: Attribution, now: string): Note {
     due_at: p.due_at === undefined ? null : due(p.due_at),
     claimed_by: null,
     claim_expires_at: null,
-    metadata: p.metadata === undefined ? {} : (({ after: _after, ...rest }) => rest)(metadata(p.metadata)),
+    metadata: p.metadata === undefined ? {} : withAfter(metadata(p.metadata), []),
     created_at: now,
     updated_at: now,
     activity_at: now,
@@ -717,7 +732,5 @@ function applyTaskUpdate(note: Note, p: Params): void {
  * so a write that sets other metadata can't drop them, or make a loop the after check would refuse.
  */
 function keepAfter(note: Note, value: unknown): Record<string, unknown> {
-  const { after: _given, ...rest } = metadata(value);
-  const after = note.metadata?.after;
-  return metadata(Array.isArray(after) && after.length ? { ...rest, after } : rest);
+  return metadata(withAfter(metadata(value), afterIds(note)));
 }

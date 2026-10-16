@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -5,7 +6,9 @@ import { age, clientParams, HiveNoteError, MUTATIONS, type Attribution, type Eve
 import { configDirectory } from './config.js';
 import { reachQueen, writes } from './merge.js';
 import { SeenCache } from './seen.js';
-import { brief, type BriefNote } from './views.js';
+import { validateServerUrl } from './client.js';
+import { LIMITS, metadata as checkMetadata, status as checkStatus, text } from './validate.js';
+import { afterIds, brief, type BriefNote } from './views.js';
 
 /**
  * A worker that keeps working while the queen can't be reached.
@@ -23,7 +26,8 @@ import { brief, type BriefNote } from './views.js';
  * does not take becomes a conflict: `hivenote conflicts` shows it, `hivenote resolve` settles it.
  */
 
-interface Entry { method: 'create' | 'append'; params: Params; name: string; agent?: string; session?: string; at: string; unreadable?: string }
+/** queen: the address of the queen it was kept for; only a merge into her sends it. */
+interface Entry { method: 'create' | 'append'; params: Params; name: string; queen?: string; agent?: string; session?: string; at: string; unreadable?: string }
 type Labels = { agent?: string; session?: string };
 
 /** What merge could not send, waiting to be settled here. */
@@ -79,6 +83,11 @@ function entries(path: string): Entry[] {
   });
 }
 
+/** A queen's address as kept: its origin, so http://host:7391/ and http://host:7391 are one queen. */
+export function queenOf(address: string): string {
+  try { return validateServerUrl(address).origin; } catch { return address; }
+}
+
 function save(path: string, left: Entry[]): void {
   if (!left.length) { rmSync(path, { force: true }); return; }
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -95,7 +104,7 @@ function who(entry: { agent?: string }): Attribution {
 }
 
 /** A note made here, as the hive would hold it, so reads and changes on this machine can find it. */
-function madeHere(entry: Entry, appends: Entry[]): Note {
+function madeHere(entry: Entry, appends: Entry[]): Note & { waits_on_names?: string[] } {
   const p = entry.params;
   const last = appends.at(-1)?.at ?? entry.at;
   return {
@@ -103,6 +112,7 @@ function madeHere(entry: Entry, appends: Entry[]): Note {
     kind: p.kind === 'task' ? 'task' : 'note', rev: 1, status: p.kind === 'task' ? (p.status as Note['status']) ?? 'todo' : null,
     due_at: (p.due_at as string | undefined) ?? null, claimed_by: null, claim_expires_at: null, metadata: (p.metadata as Record<string, unknown> | undefined) ?? {},
     created_at: entry.at, updated_at: entry.at, activity_at: last, deleted_at: null, last_attribution: who(entry), last_activity_attribution: who(appends.at(-1) ?? entry),
+    ...(Array.isArray(p.after) && p.after.length ? { waits_on_names: (p.after as unknown[]).map(String) } : {}),
   };
 }
 
@@ -118,7 +128,12 @@ export function isMadeHere(note: { last_attribution?: { principal?: string } } |
 export class QueueStore implements Store {
   /** Set once the queen could not be reached, so this command's next writes don't wait on her again. */
   private offline = false;
+  private unreachable: HiveNoteError | undefined;
+  /** The ids of a whole listing, page by page, so notes she no longer has can be let go once it is complete. */
+  private listing: Set<string> | undefined;
   private readonly seen: SeenCache;
+  /** The queen this command talks to; writes are kept for her alone. */
+  private readonly queen: string;
 
   /**
    * @param inner    the queen, with this command's labels
@@ -133,17 +148,24 @@ export class QueueStore implements Store {
     private readonly fallback = true,
     private readonly path = queuePath(),
   ) {
-    this.seen = new SeenCache(queen);
+    this.queen = queenOf(queen);
+    this.seen = new SeenCache(this.queen);
+  }
+
+  /** The kept entries for this queen. Writes kept for another queen wait for a merge into her. */
+  private mine(): Entry[] {
+    return entries(this.path).filter(entry => entry.unreadable === undefined && (entry.queen === undefined || entry.queen === this.queen));
   }
 
   async call(method: Method, params: Params = {}): Promise<unknown> {
     // The op_id (and from it a new note's id) is fixed here, so sending it later is the same write.
     const prepared = clientParams(method, params);
     const write = MUTATIONS.has(method);
-    if (!(write && this.offline)) {
+    // Once she could not be reached, this command does not wait on her again: every try costs a full timeout.
+    if (!this.offline) {
       try {
         const answer = await this.inner.call(method, prepared);
-        this.remember(method, answer);
+        this.remember(method, prepared, answer);
         return this.withKept(method, prepared, answer);
       } catch (error) {
         if (!(error instanceof HiveNoteError)) throw error;
@@ -151,29 +173,41 @@ export class QueueStore implements Store {
         if (write && error.code === 'not_found' && this.keptNote(prepared)) return this.keep(method, prepared);
         if (error.code !== 'transport_error') throw error;
         this.offline = true;
-        if (!write) {
-          // A machine that has never reached her has nothing to answer from: an empty answer would hide a wrong address or a queen that is down.
-          if (!this.fallback || !READS.has(method) || (!this.seen.since() && !kept(this.path))) throw new HiveNoteError(error.code, `${error.message}. ${method === 'changes' ? 'Waiting needs her' : 'This needs her'}; try again when she is back`, error.status);
-          return this.fromSeen(method, prepared);
-        }
+        this.unreachable = error;
       }
     }
-    return this.keep(method, prepared);
+    if (write) return this.keep(method, prepared);
+    const error = this.unreachable!;
+    // A machine that has never reached her has nothing to answer from: an empty answer would hide a wrong address or a queen that is down.
+    if (!this.fallback || !READS.has(method) || (!this.seen.since() && !this.mine().length)) throw new HiveNoteError(error.code, `${error.message}. ${this.fallback ? 'This needs her' : 'Waiting needs her'}; try again when she is back`, error.status);
+    return this.fromSeen(method, prepared);
   }
 
   // ---------- What was seen ----------
 
-  private remember(method: Method, answer: unknown): void {
-    const a = answer as { notes?: (Note & BriefNote)[]; updates?: Event[]; note?: Note };
-    if (method === 'read' && Array.isArray(a.notes)) this.seen.saw(a.notes, a.updates);
-    else if ((method === 'list' || method === 'search') && Array.isArray(a.notes)) this.seen.listed(a.notes);
-    else if (MUTATIONS.has(method) && a.note) this.seen.saw([a.note]);
+  private remember(method: Method, p: Params, answer: unknown): void {
+    const a = answer as { notes?: (Note & BriefNote)[]; updates?: Event[]; note?: Note; has_more?: boolean; missing?: string[] };
+    if (method === 'read' && Array.isArray(a.notes)) {
+      this.seen.saw(a.notes, a.updates);
+      // A name she says she does not have is not hers any more, whatever was seen under it before.
+      if (Array.isArray(p.names)) for (const name of a.missing ?? []) this.seen.forgetName(name);
+    } else if ((method === 'list' || method === 'search') && Array.isArray(a.notes)) {
+      this.seen.listed(a.notes);
+      // Every page of a listing with nothing left out says what she holds now; anything else seen has gone.
+      const whole = method === 'list' && !['kind', 'status', 'ready', 'folder'].some(key => p[key] !== undefined);
+      if (whole && (p.offset ?? 0) === 0) this.listing = new Set();
+      if (whole && this.listing) {
+        for (const note of a.notes) this.listing.add(note.id);
+        if (!a.has_more) { this.seen.keepOnly(this.listing); this.listing = undefined; }
+      }
+    } else if (MUTATIONS.has(method) && a.note) this.seen.saw([a.note]);
     this.seen.answered();
   }
 
   /** On a live answer, notes made here and not merged yet are added, so this machine sees what it wrote. */
   private withKept(method: Method, params: Params, answer: unknown): unknown {
-    if (method !== 'read' && method !== 'list') return answer;
+    // wait follows a note by id on the queen; one made here is not there, and is not shown as if it were.
+    if ((method !== 'read' && method !== 'list') || !this.fallback || (method === 'read' && params.names === undefined)) return answer;
     const { notes: made, updates } = this.made();
     if (!made.length) return answer;
     const a = answer as { notes: unknown[]; missing?: string[]; updates?: Event[]; total?: number };
@@ -190,8 +224,8 @@ export class QueueStore implements Store {
   }
 
   /** Notes made here and not merged yet, with the progress kept for them and for her notes. */
-  private made(): { notes: Note[]; updates: Event[] } {
-    const all = entries(this.path).filter(entry => !entry.unreadable);
+  private made(): { notes: (Note & { waits_on_names?: string[] })[]; updates: Event[] } {
+    const all = this.mine();
     const notes = all.filter(entry => entry.method === 'create').map(entry => madeHere(entry, all.filter(other => other.method === 'append' && other.params.id === entry.params.id)));
     const updates = all.filter(entry => entry.method === 'append').map((entry, i) => keptEvent(entry, -(i + 1)));
     return { notes, updates };
@@ -219,7 +253,14 @@ export class QueueStore implements Store {
       return { notes, missing, updates: notes.flatMap(updatesOf), updates_has_more: false, offline: { ...offline.offline, ...unread } };
     }
     const wholeIds = new Set(whole.map(note => note.id));
-    let briefs: (BriefNote & { snippet?: string })[] = [...whole.map(brief), ...this.seen.briefs().filter(entry => !wholeIds.has(entry.id))];
+    const listedAs = new Map(this.seen.briefs().map(entry => [entry.id, entry]));
+    let briefs: (BriefNote & { snippet?: string })[] = [
+      ...whole.map(note => {
+        const waits = (note as { waits_on_names?: string[] }).waits_on_names ?? listedAs.get(note.id)?.waits_on;
+        return { ...brief(note), ...(waits?.length ? { waits_on: waits } : {}) };
+      }),
+      ...this.seen.briefs().filter(entry => !wholeIds.has(entry.id)),
+    ];
     if (method === 'search') {
       const words = String(p.query ?? '').toLowerCase().split(/\s+/u).filter(Boolean);
       const text = (entry: BriefNote): string => {
@@ -232,10 +273,16 @@ export class QueueStore implements Store {
       if (p.status) briefs = briefs.filter(entry => entry.status === p.status);
       if (typeof p.folder === 'string') { const prefix = p.folder.replace(/\/+$/u, '') + '/'; briefs = briefs.filter(entry => entry.name.startsWith(prefix)); }
       if (p.ready) {
-        const done = new Set(whole.filter(note => note.status === 'done' || note.status === 'cancelled').map(note => note.id));
+        // As far as this machine knows: a task waits on one that is not known to be done or cancelled.
+        const known = [...whole, ...this.seen.briefs()];
+        const closed = (match: (entry: { id: string; name: string }) => boolean): boolean => {
+          const found = known.find(match);
+          return !found || found.status === 'done' || found.status === 'cancelled';
+        };
         briefs = briefs.filter(entry => entry.kind === 'task' && entry.status === 'todo').filter(entry => {
-          const after = whole.find(note => note.id === entry.id)?.metadata.after;
-          return !Array.isArray(after) || after.every(id => done.has(String(id)));
+          const note = whole.find(other => other.id === entry.id) as (Note & { waits_on_names?: string[] }) | undefined;
+          if (note) return afterIds(note).every(id => closed(other => other.id === id)) && (note.waits_on_names ?? []).every(name => closed(other => other.name === name));
+          return !entry.waits_on?.length;
         }).sort((a, b) => (a.updated_at < b.updated_at ? -1 : 1));
       }
     }
@@ -246,20 +293,22 @@ export class QueueStore implements Store {
 
   /** The note made here (and not merged yet) that a write names, if it is one. */
   private keptNote(p: Params): Entry | undefined {
-    return entries(this.path).find(entry => entry.method === 'create' && (p.id !== undefined ? entry.params.id === p.id : entry.name === p.note));
+    return this.mine().find(entry => entry.method === 'create' && (p.id !== undefined ? entry.params.id === p.id : entry.name === p.note));
   }
 
   private async keep(method: Method, p: Params): Promise<unknown> {
     return locked(this.path, () => {
       const all = entries(this.path);
-      const base = { ...this.labels, at: new Date().toISOString() };
+      const here = all.filter(entry => entry.unreadable === undefined && (entry.queen === undefined || entry.queen === this.queen));
+      const base = { ...this.labels, queen: this.queen, at: new Date().toISOString() };
+      checkKept(method, p);
       if (method === 'create') {
         const name = String(p.name ?? '');
-        if (all.some(entry => entry.method === 'create' && entry.name === name)) throw new HiveNoteError('conflict', `'${name}' was already added on this machine while the queen was away. Change it with edit, replace or append`, 409);
+        if (here.some(entry => entry.method === 'create' && entry.name === name)) throw new HiveNoteError('conflict', `'${name}' was already added on this machine while the queen was away. Change it with edit, replace or append`, 409);
         save(this.path, [...all, { method: 'create', params: p, name, ...base }]);
         return { queued: { note: name } };
       }
-      const target = all.find(entry => entry.method === 'create' && (p.id !== undefined ? entry.params.id === p.id : entry.name === p.note));
+      const target = here.find(entry => entry.method === 'create' && (p.id !== undefined ? entry.params.id === p.id : entry.name === p.note));
       if (target) return this.changeMadeHere(all, target, method, p, base);
       if (method === 'append') {
         const name = String(p.note ?? '');
@@ -276,6 +325,9 @@ export class QueueStore implements Store {
   /** A change to a note made here: it changes what is kept, since nobody else has the note yet. */
   private changeMadeHere(all: Entry[], target: Entry, method: Method, p: Params, base: Labels & { at: string }): unknown {
     const params = target.params;
+    // The kept note changed, so it is a different write: one the queen may already have under the old op_id must not
+    // count as this one. The id stays, so progress kept for it still lands on it.
+    if (method !== 'append' && method !== 'delete') params.op_id = p.op_id;
     switch (method) {
       case 'append':
         save(this.path, [...all, { method: 'append', params: { id: params.id, body: p.body, op_id: p.op_id }, name: target.name, ...base }]);
@@ -291,7 +343,7 @@ export class QueueStore implements Store {
       case 'replace':
         for (const key of ['content', 'description', 'metadata'] as const) if (p[key] !== undefined) params[key] = p[key];
         if (p.name !== undefined) {
-          if (all.some(entry => entry.method === 'create' && entry.name === p.name && entry !== target)) throw new HiveNoteError('conflict', `'${String(p.name)}' was already added on this machine`, 409);
+          if (all.some(entry => entry.method === 'create' && entry.name === p.name && entry !== target && entry.queen === target.queen)) throw new HiveNoteError('conflict', `'${String(p.name)}' was already added on this machine`, 409);
           params.name = p.name;
           for (const entry of all) if (entry.params.id === params.id) entry.name = String(p.name);
         }
@@ -317,6 +369,27 @@ export class QueueStore implements Store {
   close(): void { this.seen.save(); this.inner.close?.(); }
 }
 
+/** What the queen would refuse anyway is refused now, not at merge as a conflict. */
+function checkKept(method: Method, p: Params): void {
+  if (method === 'create') {
+    text(p.name, 'name', LIMITS.name);
+    text(p.description ?? '', 'description', LIMITS.description, true);
+    text(p.content ?? '', 'content', LIMITS.content, true);
+    if (p.status !== undefined) checkStatus(p.status);
+    if (p.metadata !== undefined) checkMetadata(p.metadata);
+    if (p.after !== undefined && p.kind !== 'task') throw new HiveNoteError('validation_error', 'Only a task can wait on other tasks');
+  }
+  if (method === 'append') text(p.body, 'body', LIMITS.content);
+  if (method === 'edit') { text(p.old_str, 'old_str', LIMITS.content); text(p.new_str ?? '', 'new_str', LIMITS.content, true); }
+  if (method === 'replace') {
+    if (p.name !== undefined) text(p.name, 'name', LIMITS.name);
+    if (p.description !== undefined) text(p.description, 'description', LIMITS.description, true);
+    if (p.content !== undefined) text(p.content, 'content', LIMITS.content, true);
+    if (p.metadata !== undefined) checkMetadata(p.metadata);
+  }
+  if (method === 'update_task' && p.status !== undefined) checkStatus(p.status);
+}
+
 /** Why a write could not be kept while the queen is away. */
 export function refused(method: Method, p: Params): HiveNoteError {
   const why = method === 'take' || (method === 'update_task' && p.status === 'doing')
@@ -335,10 +408,16 @@ export interface MergeReport { merged_into: string; applied: number; already: nu
  */
 export async function mergeKept(address: string, reach: (labels: Labels) => Store, path = queuePath()): Promise<MergeReport> {
   const url = await reachQueen(address);
-  const reader = reach({});
+  const queen = queenOf(url);
   let applied = 0, already = 0;
   const report: MergeReport['conflicts'] = [];
   await locked(path, async () => {
+    // Writes kept for another queen are hers alone: sending them here could put one hive's notes into another's.
+    const elsewhere = [...new Set(entries(path).flatMap(entry => (entry.queen !== undefined && entry.queen !== queen ? [entry.queen] : [])))];
+    if (elsewhere.length) {
+      const count = entries(path).filter(entry => entry.queen !== undefined && entry.queen !== queen).length;
+      throw new HiveNoteError('other_queen', `${writes(count)} on this machine ${count === 1 ? 'was' : 'were'} kept for the queen at ${elsewhere.join(', ')}, not ${queen}. Nothing was sent. Connect to ${elsewhere.length === 1 ? 'her' : 'each'} again and run hivenote merge there; to forget them instead, delete ${path}`, 409);
+    }
     let left = entries(path);
     // A note she did not take holds back the progress kept for it, which joins its conflict.
     const held = new Map<string, Conflict>();
@@ -346,27 +425,36 @@ export async function mergeKept(address: string, reach: (labels: Labels) => Stor
     for (const entry of [...left]) {
       const id = String(entry.params.id ?? '');
       if (entry.unreadable !== undefined) {
-        addConflict({ kind: 'progress', name: '(unreadable)', progress: [entry.unreadable], why: 'This line in the kept file could not be read, probably cut short by a crash. Its text is kept as it was', code: 'unreadable' });
+        await addConflict({ kind: 'progress', name: '(unreadable)', progress: [entry.unreadable], why: 'This line in the kept file could not be read, probably cut short by a crash. Its text is kept as it was', code: 'unreadable' });
         report.push({ note: '(unreadable)', kind: 'progress', by: HERE, why: 'could not be read' });
         settle(entry);
         continue;
       }
       const earlier = held.get(id);
-      if (earlier && entry.method === 'append') { earlier.progress.push(String(entry.params.body)); rewriteLast(earlier); settle(entry); continue; }
+      if (earlier && entry.method === 'append') { earlier.progress.push(String(entry.params.body)); await rewriteLast(earlier); settle(entry); continue; }
       try {
-        if (await has(reader, id, String(entry.params.op_id))) already++;
-        else { await reach(labelsOf(entry)).call(entry.method, entry.params); applied++; }
+        // Sent with the op_id it was made with: a write she already has is answered from her receipt, or refused
+        // as op_id_conflict once that receipt is gone, and is never made twice.
+        const answer = await reach(labelsOf(entry)).call(entry.method, entry.params) as { note?: { id?: string } };
+        applied++;
+        // A name she once had keeps that note's history, so the note can come back under her id, not the one made
+        // here: what was kept for it goes there too.
+        const given = answer?.note?.id;
+        if (entry.method === 'create' && typeof given === 'string' && given !== id) {
+          for (const other of left) if (other !== entry && String(other.params.id ?? '') === id) other.params = { ...other.params, id: given };
+        }
       } catch (error) {
         if (!(error instanceof HiveNoteError)) throw error;
         if (error.code === 'op_id_conflict') already++;
-        else if (error.code === 'transport_error' || error.code === 'busy' || error.status === 401) {
+        // She can't be reached, is busy, or won't take writes from this token: stop, and keep everything left.
+        else if (error.code === 'transport_error' || error.code === 'busy' || error.status === 401 || error.status === 403) {
           throw new HiveNoteError(error.code, `${error.message}. ${writes(applied)} ${applied === 1 ? 'was' : 'were'} merged before that. Run hivenote merge again; nothing is made twice`, error.status);
         } else {
           const why = entry.method === 'append' && error.code === 'not_found' ? `'${entry.name}' is no longer on the queen (deleted meanwhile)` : error.message;
           const conflict: Conflict = entry.method === 'create'
             ? { kind: entry.params.kind === 'task' ? 'task' : 'note', name: entry.name, params: entry.params, progress: [], ...labelsOf(entry), why, code: error.code }
             : { kind: 'progress', name: entry.name, progress: [String(entry.params.body)], ...labelsOf(entry), why, code: error.code };
-          addConflict(conflict);
+          await addConflict(conflict);
           held.set(id, conflict);
           report.push({ note: entry.name, kind: conflict.kind, by: entry.agent ?? HERE, why });
         }
@@ -378,35 +466,24 @@ export async function mergeKept(address: string, reach: (labels: Labels) => Stor
   return { merged_into: url, applied, already, conflicts: report, ...(next ? { next } : {}) };
 }
 
-/** Whether the queen already has this write: the note's history has a change with its op_id. */
-async function has(queen: Store, id: string, opId: string): Promise<boolean> {
-  for (let offset = 0; ;) {
-    let page: { events: Event[]; has_more: boolean };
-    try {
-      page = await queen.call('history', { id, offset, limit: 100 }) as typeof page;
-    } catch (error) {
-      if (error instanceof HiveNoteError && error.code === 'not_found') return false;
-      throw error;
-    }
-    if (page.events.some(event => event.op_id === opId)) return true;
-    if (!page.has_more || !page.events.length) return false;
-    offset += page.events.length;
-  }
-}
-
 function labelsOf(entry: { agent?: string; session?: string }): Labels {
   return { ...(entry.agent ? { agent: entry.agent } : {}), ...(entry.session ? { session: entry.session } : {}) };
 }
 
-function addConflict(conflict: Conflict): void {
-  mkdirSync(dirname(conflictsPath()), { recursive: true, mode: 0o700 });
-  appendFileSync(conflictsPath(), JSON.stringify(conflict) + '\n', { mode: 0o600 });
+/** Changes to the conflicts file hold its lock, as resolve does, so neither loses what the other wrote. */
+function addConflict(conflict: Conflict): Promise<void> {
+  return locked(conflictsPath(), () => {
+    mkdirSync(dirname(conflictsPath()), { recursive: true, mode: 0o700 });
+    appendFileSync(conflictsPath(), JSON.stringify(conflict) + '\n', { mode: 0o600 });
+  });
 }
 /** A conflict gained a progress line; it is the one most recently added for that note. */
-function rewriteLast(conflict: Conflict): void {
-  const all = lines<Conflict>(conflictsPath());
-  for (let i = all.length - 1; i >= 0; i--) if (all[i]!.name === conflict.name) { all[i] = conflict; break; }
-  saveConflicts(all);
+function rewriteLast(conflict: Conflict): Promise<void> {
+  return locked(conflictsPath(), () => {
+    const all = lines<Conflict>(conflictsPath());
+    for (let i = all.length - 1; i >= 0; i--) if (all[i]!.name === conflict.name) { all[i] = conflict; break; }
+    saveConflicts(all);
+  });
 }
 function saveConflicts(all: Conflict[]): void {
   if (!all.length) { rmSync(conflictsPath(), { force: true }); return; }
@@ -449,15 +526,19 @@ export async function resolveConflict(store: Store, name: string, how: 'as' | 'a
     if (index < 0) throw new HiveNoteError('not_found', `No conflict for '${name}'. hivenote conflicts lists them`, 404);
     const conflict = all[index]!;
     let answer: Record<string, unknown> = { ok: 'resolved', note: name, how };
+    // Each write gets an op_id fixed by the conflict and the step, so running resolve again after one that stopped
+    // part way makes nothing twice: what she has is answered from her receipts.
+    const seed = createHash('sha256').update(JSON.stringify([conflict, how, newName ?? ''])).digest('hex');
+    const op = (step: number): string => `resolve-${seed.slice(0, 32)}-${step}`;
     if (how !== 'drop' && conflict.code === 'unreadable') throw new HiveNoteError('validation_error', 'This kept line could not be read, so it can only be dropped. hivenote conflicts shows its text: add it again by hand if it matters', 400);
     if (how === 'as') {
       if (conflict.params) {
         const { id: _id, op_id: _op, ...params } = conflict.params;
-        await store.call('create', { ...params, name: newName });
+        await store.call('create', { ...params, name: newName, op_id: op(0) });
       } else {
-        await store.call('create', { name: newName, description: `Progress kept for '${name}' while the queen was away`, content: '' });
+        await store.call('create', { name: newName, description: `Progress kept for '${name}' while the queen was away`, content: '', op_id: op(0) });
       }
-      for (const body of conflict.progress) await store.call('append', { note: newName, body });
+      for (const [i, body] of conflict.progress.entries()) await store.call('append', { note: newName, body, op_id: op(i + 1) });
       answer = { ...answer, note: newName, was: name };
     } else if (how === 'append') {
       const parts: string[] = [];
@@ -466,7 +547,7 @@ export async function resolveConflict(store: Store, name: string, how: 'as' | 'a
         parts.push(`${conflict.kind === 'task' ? 'Task' : 'Note'} '${name}' written by ${conflict.agent ?? 'another agent'} while the queen was away: ${description}${content ? `\n\n${content}` : ''}`);
       }
       parts.push(...conflict.progress);
-      for (const body of parts) await store.call('append', { note: name, body });
+      for (const [i, body] of parts.entries()) await store.call('append', { note: name, body, op_id: op(i + 1) });
     }
     all.splice(index, 1);
     saveConflicts(all);

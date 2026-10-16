@@ -40,8 +40,16 @@ export class SeenCache {
     return this.data;
   }
 
-  /** The queen answered just now. */
-  answered(): void { this.get().at = new Date().toISOString(); this.dirty = true; }
+  /**
+   * The queen answered just now. Saved with the next change, or once a minute: rewriting a large file on every
+   * command would cost each one far more than the answer itself.
+   */
+  answered(): void {
+    const data = this.get(), now = new Date();
+    if (!this.dirty && data.at && now.getTime() - Date.parse(data.at) < 60_000) return;
+    data.at = now.toISOString();
+    this.dirty = true;
+  }
   /** When she last answered; empty when never. */
   since(): string { return this.get().at; }
 
@@ -63,7 +71,32 @@ export class SeenCache {
   /** Names and descriptions, from a listing or a search. */
   listed(entries: (BriefNote & { snippet?: unknown })[]): void {
     const data = this.get();
-    for (const { snippet: _snippet, ...entry } of entries) if (typeof entry.id === 'string') data.briefs[entry.id] = entry;
+    for (const { snippet: _snippet, ...entry } of entries) {
+      if (typeof entry.id !== 'string') continue;
+      data.briefs[entry.id] = entry;
+      // A note that changed since it was read is no longer known whole: its old text under maybe an old name would
+      // be answered as if it were current, and a write by that name could land on the wrong note.
+      const whole = data.notes[entry.id]?.note;
+      if (whole && (whole.updated_at !== entry.updated_at || whole.name !== entry.name)) delete data.notes[entry.id];
+      // The text is what was seen; a newer change to the state (a mark) is taken from the listing.
+      if (whole && data.notes[entry.id] && entry.status !== undefined) data.notes[entry.id]!.note.status = entry.status as Note['status'];
+    }
+    this.dirty = true;
+  }
+
+  /** A whole listing came back: whatever is not in it is no longer hers. */
+  keepOnly(ids: Set<string>): void {
+    const data = this.get();
+    for (const id of Object.keys(data.briefs)) if (!ids.has(id)) delete data.briefs[id];
+    for (const id of Object.keys(data.notes)) if (!ids.has(id)) delete data.notes[id];
+    this.dirty = true;
+  }
+
+  /** She has no note by this name now. */
+  forgetName(name: string): void {
+    const data = this.get();
+    for (const [id, entry] of Object.entries(data.notes)) if (entry.note.name === name) delete data.notes[id];
+    for (const [id, entry] of Object.entries(data.briefs)) if (entry.name === name) delete data.briefs[id];
     this.dirty = true;
   }
 
@@ -91,11 +124,14 @@ export class SeenCache {
     const data = this.data;
     let text = JSON.stringify(data);
     if (text.length > MAX_BYTES) {
-      for (const [id] of Object.entries(data.notes).sort(([, a], [, b]) => (a.seen < b.seen ? -1 : 1))) {
+      // Each note's size is measured once and the oldest let go until the rest fit; the file is then written once.
+      let over = text.length - MAX_BYTES;
+      for (const [id, entry] of Object.entries(data.notes).sort(([, a], [, b]) => (a.seen < b.seen ? -1 : 1))) {
+        if (over <= 0) break;
+        over -= JSON.stringify(id).length + JSON.stringify(entry).length + 2;
         delete data.notes[id];
-        text = JSON.stringify(data);
-        if (text.length <= MAX_BYTES) break;
       }
+      text = JSON.stringify(data);
     }
     try {
       mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });

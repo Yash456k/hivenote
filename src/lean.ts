@@ -1,4 +1,5 @@
 import { age, byline, type Event, type Note, type Previous } from './contract.js';
+import { AFTER_KEY } from './views.js';
 
 /**
  * What an agent or a script is shown by default: the parts of an answer it acts on.
@@ -24,7 +25,7 @@ function note(stored: Note, now: number): Json {
   if (stored.status !== null) out.status = stored.status;
   if (stored.due_at !== null) out.due_at = stored.due_at;
   // The tasks it waits on are kept there by id; they are shown by name as waits_on instead.
-  const { after: _after, ...metadata } = stored.metadata ?? {};
+  const { [AFTER_KEY]: _after, ...metadata } = stored.metadata ?? {};
   if (Object.keys(metadata).length) out.metadata = metadata;
   out.updated_by = byline(stored.last_attribution);
   out.ago = age(stored.updated_at, now);

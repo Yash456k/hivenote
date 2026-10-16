@@ -162,11 +162,12 @@ export function pretty(command: string, value: unknown): string {
       return [...lines, ...(v.next ? ['', dim(String(v.next))] : [])].join('\n');
     }
     case 'conflicts': {
-      const conflicts = v.conflicts as { note: string; kind: string; by: string; why: string; description?: string; content?: string; text?: string; on_the_queen?: { description: string; content: string } }[];
+      const conflicts = v.conflicts as { note: string; kind: string; by: string; why: string; description?: string; content?: string; text?: string; progress?: string[]; on_the_queen?: { description: string; content: string } }[];
       if (!conflicts.length) return 'No conflicts.';
       return [...conflicts.map(item => [
         `${bold(item.note)} ${dim(`${item.kind} by ${item.by}`)}`, `  ${item.why}`,
-        ...(item.text !== undefined ? [`  ${item.text}`] : [`  Kept here: ${item.description ?? ''}`, ...(item.content ? [dim(indent(item.content))] : [])]),
+        ...(item.text !== undefined ? [`  ${item.text}`] : item.description !== undefined || item.content !== undefined ? [`  Kept here: ${item.description ?? ''}`, ...(item.content ? [dim(indent(item.content))] : [])] : []),
+        ...(item.progress?.length ? ['  Progress kept here:', ...item.progress.map(line => dim(indent(line)))] : []),
         ...(item.on_the_queen ? [`  On the queen: ${item.on_the_queen.description}`, ...(item.on_the_queen.content ? [dim(indent(item.on_the_queen.content))] : [])] : []),
       ].join('\n')), '', dim(String(v.settle))].join('\n\n');
     }

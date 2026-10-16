@@ -34,7 +34,7 @@ dashboard ────┘ (ui/, reads through HTTP)
 
 One SQLite file, opened with Node's built-in `node:sqlite` (Node 22.16 is the first with full-text search). Tables: `notes` (the current version of each note), `events` (every change, with a full copy of the note for each version), `receipts` (the answer to every write, by `op_id`, so a resent write isn't applied twice), `clients` (token hashes) and `notes_fts` (the search index, updated in the same transaction as the note).
 
-The tasks a task waits on are kept as a list of note IDs in its `metadata` (`metadata.after`), which needed no schema change; `ready` and `take` read them with SQLite's JSON functions. Folders are only names with a `/` in them.
+The tasks a task waits on are kept as a list of note IDs in its `metadata` (`metadata["hivenote:after"]`, a key of its own so a caller's own `after` is left alone), which needed no schema change; `ready` and `take` read them with SQLite's JSON functions. Folders are only names with a `/` in them.
 
 Writes take the write lock up front, check and change everything inside one transaction, and never wait on the network or other files while holding it. `PRAGMA user_version` records the schema version; see AGENTS.md for how a change to it must keep users' data.
 

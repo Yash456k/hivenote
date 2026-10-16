@@ -39,6 +39,28 @@ test('a task waits on others: ready shows what can start, and the link survives 
   assert.match(failed(loop).message, /'build-backend' cannot wait on 'deploy', which already waits on 'build-backend'/u);
 });
 
+test('restore and a reused name never leave tasks stuck, and a caller\'s own metadata after is kept', async t => {
+  const store = new SqliteStore(join(await sandbox(t, 'after-restore'), 'notes.db'), actor());
+  t.after(() => store.close());
+  const task = (name, extra = {}) => store.call('create', params({ name, description: name, content: '', kind: 'task', ...extra }));
+  await task('a'); await task('b');
+  const waited = await store.call('update_task', params({ note: 'a', after: ['b'] }));
+  await store.call('update_task', params({ note: 'a', not_after: ['b'] }));
+  await store.call('update_task', params({ note: 'b', after: ['a'] }));
+  // The version where a waited on b comes back without that wait, which would now be a loop.
+  await store.call('restore', params({ note: 'a', rev: waited.note.rev }));
+  assert.deepEqual((await store.call('list', { ready: true })).notes.map(note => note.name), ['a']);
+
+  // deploy waited on a build that was deleted; a new, unrelated build does not hold it up.
+  await task('build'); await task('deploy', { after: ['build'] });
+  await store.call('delete', params({ note: 'build' }));
+  await task('build');
+  assert.equal((await store.call('read', { names: ['deploy'] })).waits_on, undefined);
+
+  const own = await store.call('create', params({ name: 'meal', description: '', content: '', metadata: { after: 'lunch' } }));
+  assert.deepEqual(own.note.metadata, { after: 'lunch' });
+});
+
 test('take gives each ready task to exactly one of many agents asking at once', { timeout: 120_000 }, async t => {
   const dir = await sandbox(t, 'take');
   const store = new SqliteStore(join(dir, 'queen.db'), actor());

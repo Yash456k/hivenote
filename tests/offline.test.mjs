@@ -85,6 +85,39 @@ test('a worker keeps working while the queen is away, and merge gives her its wr
   assert.deepEqual([JSON.parse(status.stdout).kept, JSON.parse(status.stdout).conflicts, status.stderr], [0, 0, '']);
 });
 
+test('merge sends kept writes only to the queen they were kept for, and to the note she gives back', { timeout: 90_000 }, async t => {
+  const dir = await sandbox(t, 'offline-queens');
+  const open = async name => {
+    const store = new SqliteStore(join(dir, `${name}.db`), actor());
+    const { token } = store.tokenCreate('laptop');
+    const queen = { store, token, server: await startServer(store, { port: 0 }) };
+    t.after(async () => { if (queen.server.listening) await closeServer(queen.server); store.close(); });
+    return { ...queen, url: `http://127.0.0.1:${queen.server.address().port}`, set server(value) { queen.server = value; }, get server() { return queen.server; } };
+  };
+  const one = await open('one'), two = await open('two');
+  // A note one once had under the name the worker will use.
+  await one.store.call('create', params({ name: 'retro', description: 'Old', content: 'old' }));
+  await one.store.call('delete', params({ note: 'retro' }));
+  const home = join(dir, 'worker');
+  const as = queen => (...words) => run(process.execPath, [cli, '--agent', 'builder', ...words], { env: { HIVENOTE_URL: queen.url, HIVENOTE_TOKEN: queen.token, HIVENOTE_HOME: home } });
+  const json = async answer => { const done = await answer; return JSON.parse(done.stdout || done.stderr.trim().split('\n').at(-1)); };
+  await json(as(one)('list'));
+  const port = one.server.address().port;
+  await closeServer(one.server);
+  await json(as(one)('add', 'retro', 'What went wrong', 'text'));
+  await json(as(one)('append', 'retro', 'Found the cause'));
+
+  // Connected elsewhere, nothing is sent.
+  assert.equal((await json(as(two)('merge'))).error.code, 'other_queen');
+  assert.deepEqual((await two.store.call('list', {})).notes, []);
+
+  one.server = await startServer(one.store, { port });
+  const merged = await json(as(one)('merge'));
+  assert.deepEqual([merged.applied, merged.conflicts], [2, []]);
+  const progress = (await one.store.call('history', { note: 'retro' })).events.filter(event => event.kind === 'append').map(event => event.body);
+  assert.deepEqual(progress, ['Found the cause']);
+});
+
 test('a hive made by 0.5.0 opens as it is, with nothing to upgrade', async t => {
   const dir = await sandbox(t, 'v05');
   const path = join(dir, 'data.db');

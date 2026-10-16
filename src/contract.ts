@@ -71,7 +71,7 @@ export function clientParams(method: Method, params: Params = {}): Params {
  seq is the number of the hive's latest change when the answer was made: changes {since:seq} gives what came after.
  search {query,offset?,limit?,detail?} => {notes:(BriefNote&{snippet})[],total,offset,has_more}
  create {id?:UUID,name,description,content,kind?,metadata?,status?,due_at?,after?:string[],op_id}
- after names the tasks a task waits on. They are stored by id in metadata.after, so a rename keeps the link;
+ after names the tasks a task waits on. They are stored by id in metadata["hivenote:after"], so a rename keeps the link;
  the answer gives them by name as after.
  edit {note|id,old_str,new_str,op_id}; replace {note|id,content?,name?,description?,metadata?,op_id}
  append {note|id,body,op_id}; delete {note|id,op_id}
