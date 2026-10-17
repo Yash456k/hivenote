@@ -59,8 +59,11 @@ export function ask(question: string, hidden: boolean): Promise<string> {
 }
 
 /** Lines a person put in config.json that have nothing to do with which queen is used. */
-function keptSettings(): { helper?: string } {
-  try { const { helper } = loadConfig(); return helper ? { helper } : {}; } catch { return {}; }
+function keptSettings(): { helper?: string; takeover?: string } {
+  try {
+    const { helper, takeover } = loadConfig();
+    return { ...(helper ? { helper } : {}), ...(takeover ? { takeover } : {}) };
+  } catch { return {}; }
 }
 
 /** The token this machine already holds, and the address it was saved for. */

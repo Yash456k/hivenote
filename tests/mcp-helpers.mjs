@@ -3,7 +3,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { fixture } from './helpers.mjs';
 
-export const methodNames = ['list', 'read', 'search', 'create', 'edit', 'replace', 'append', 'delete', 'history', 'revision', 'restore', 'changes', 'update_task'];
+export const methodNames = ['list', 'read', 'search', 'create', 'edit', 'replace', 'append', 'delete', 'history', 'revision', 'restore', 'changes', 'update_task', 'take'];
 
 export async function connectMcp(command, args, env = {}) {
   const transport = new StdioClientTransport({ command, args, env: { ...process.env, ...env }, stderr: 'pipe' });

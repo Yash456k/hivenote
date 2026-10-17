@@ -6,16 +6,16 @@ import { age, byline, clientParams, isMethod, MUTATIONS, HiveNoteError, type Act
 import { openDatabase, storageError, transaction } from './database.js';
 import { held, HOLD_LIMIT_MS } from './wait.js';
 import { due, id, integer, invalid, json, LIMITS, metadata, params as checkParams, status, STATUSES, text } from './validate.js';
-import { JSON_COLUMNS, NOTE_COLUMNS, toEvent, toNote, view, type Row } from './views.js';
+import { AFTER_KEY, AFTER_PATH, afterIds, withAfter, JSON_COLUMNS, NOTE_COLUMNS, toEvent, toNote, view, type Row } from './views.js';
 
 export type { BriefNote } from './views.js';
 
 /** The parameters each method accepts; anything else is rejected. */
 const PARAMETERS: Record<Method, readonly string[]> = {
-  list: ['offset', 'limit', 'kind', 'status', 'detail'],
+  list: ['offset', 'limit', 'kind', 'status', 'ready', 'folder', 'detail'],
   read: ['ids', 'names'],
   search: ['query', 'offset', 'limit', 'detail'],
-  create: ['id', 'name', 'description', 'content', 'kind', 'metadata', 'status', 'due_at', 'op_id'],
+  create: ['id', 'name', 'description', 'content', 'kind', 'metadata', 'status', 'due_at', 'after', 'op_id'],
   edit: ['id', 'note', 'old_str', 'new_str', 'op_id'],
   replace: ['id', 'note', 'content', 'name', 'description', 'metadata', 'op_id'],
   append: ['id', 'note', 'body', 'op_id'],
@@ -24,11 +24,32 @@ const PARAMETERS: Record<Method, readonly string[]> = {
   revision: ['id', 'note', 'rev'],
   restore: ['id', 'note', 'rev', 'op_id'],
   changes: ['since', 'limit', 'tail', 'hold'],
-  update_task: ['id', 'note', 'status', 'due_at', 'metadata', 'claim', 'op_id'],
+  update_task: ['id', 'note', 'status', 'due_at', 'metadata', 'claim', 'after', 'not_after', 'op_id'],
+  take: ['op_id'],
 };
 
+/**
+ * A task (as `n`) that waits on a live task that is not done. A deleted task is no longer waited on,
+ * and restoring it brings the wait back, since the id stays in the waiting task's metadata.
+ */
+const BLOCKED = `(coalesce(json_type(n.metadata,${AFTER_PATH}),'')='array' AND EXISTS (SELECT 1 FROM json_each(n.metadata,${AFTER_PATH}) a JOIN notes p ON p.id=a.value AND p.deleted_at IS NULL WHERE p.status NOT IN ('done','cancelled')))`;
 
-interface Receipt { note: Note; event_seq: number; op_id: string; previous?: Previous }
+/** When a task was added: its latest create, so one added under a deleted task's name is not put at the old one's place. */
+const ADDED = `(SELECT max(seq) FROM events e WHERE e.note_id=n.id AND e.kind='create')`;
+
+/** How long a doing task can go idle before another agent may take it over: off unless the hive's config.json sets takeover. */
+export const TAKEOVER_MS = 0;
+
+
+interface Receipt {
+  note: Note; event_seq: number; op_id: string; previous?: Previous;
+  /** The tasks this task waits on, by name, after a write that named them. */
+  after?: string[];
+  /** A doing task taken from an agent that had gone quiet: who had it, and when anything last happened on it. */
+  taken_over?: { from: string; at: string };
+  /** After a task is cancelled: the open tasks that waited on it, which now go ahead without it. */
+  waiting?: string[];
+}
 
 /**
  * How many answers to writes are kept for a retry to be given again. A retry comes within seconds,
@@ -71,11 +92,14 @@ export function localActor(): Actor {
 export class SqliteStore implements Store {
   private db: DatabaseSync;
   readonly path: string;
+  /** 0 means a doing task is never taken over. */
+  private readonly takeoverMs: number;
 
-  constructor(path: string, private actor: Actor = localActor()) {
+  constructor(path: string, private actor: Actor = localActor(), options: { takeoverMs?: number } = {}) {
     // Callers with direct file access may label themselves, but are never token-verified.
     this.actor = { ...actor, verified: false };
     this.path = resolve(path);
+    this.takeoverMs = options.takeoverMs ?? TAKEOVER_MS;
     this.db = openDatabase(this.path);
   }
 
@@ -151,36 +175,56 @@ export class SqliteStore implements Store {
       if (gone) {
         const before = toNote(gone);
         Object.assign(note, { id: before.id, rev: before.rev + 1, created_at: before.created_at });
+        // A new note under a deleted one's name is a new thing: tasks that waited on the deleted one don't wait on it.
+        this.forgetWaitsOn(before.id);
+      }
+      if (p.after !== undefined) {
+        if (note.kind !== 'task') invalid('Only a task can wait on other tasks');
+        this.setAfter(note, p.after, undefined);
       }
       this.save(note, !gone);
-      return this.record(note, 'create', p, who, now);
+      const receipt = this.record(note, 'create', p, who, now);
+      if (p.after !== undefined) receipt.after = this.afterNames(note);
+      return receipt;
     }
 
-    let note = this.find(p, method === 'restore');
+    let note = method === 'take' ? this.next(now) : this.find(p, method === 'restore');
 
-    let eventKind = method as string;
+    let eventKind = method === 'take' ? 'update_task' : method as string;
     let previous: Previous | undefined;
+    let takenOver: Receipt['taken_over'];
     switch (method) {
       case 'append': text(p.body, 'body', LIMITS.content); break;
       case 'edit': this.applyEdit(note, p); break;
       case 'replace': applyReplace(note, p); break;
       case 'delete': note.deleted_at = now; note.claimed_by = null; note.claim_expires_at = null; break;
       case 'restore': note = this.restored(note, p.rev); break;
-      case 'update_task':
+      case 'take':
+      case 'update_task': {
+        // take is a claim of the task the hive picked; it is recorded as the mark it is.
+        const task: Params = method === 'take' ? { status: 'doing', claim: true } : p;
         // Marking never locks, so the answer says whose state was replaced; the caller can then think again.
-        if (p.status !== undefined) previous = { status: note.status, ...this.statusSetter(note) };
-        if (p.claim !== undefined) {
-          if (p.claim !== true || p.status !== 'doing') invalid('claim is true, and goes with status doing');
+        if (task.status !== undefined) previous = { status: note.status, ...this.statusSetter(note) };
+        if (task.claim !== undefined) {
+          if (task.claim !== true || task.status !== 'doing') invalid('claim is true, and goes with status doing');
           // Taking a task is the one mark that must not go by an old look at the board: checked here, inside the
           // write, two agents asking at the same moment cannot both be told the task is theirs.
           const held = note.status === 'doing' || note.status === 'done' || note.status === 'cancelled';
           if (held && previous!.by !== byline(who)) {
-            const state = note.status === 'doing' ? 'is taken' : `is already ${note.status}`;
-            throw new HiveNoteError('taken', `'${note.name}' ${state}: ${previous!.by} marked it ${note.status} ${age(previous!.at, now)} ago. Nothing was changed`, 409, previous);
+            // An agent that stopped leaves its task doing; once nothing has happened on it for long enough, it is free.
+            if (note.status === 'doing' && this.takeoverMs > 0 && Date.parse(now) - Date.parse(note.activity_at) >= this.takeoverMs) {
+              takenOver = { from: previous!.by, at: note.activity_at };
+            } else {
+              const state = note.status === 'doing' ? 'is taken' : `is already ${note.status}`;
+              const later = note.status === 'doing' && this.takeoverMs > 0 ? `. It can be taken over once nothing has happened on it for ${age(new Date(0).toISOString(), this.takeoverMs)}` : '';
+              throw new HiveNoteError('taken', `'${note.name}' ${state}: ${previous!.by} marked it ${note.status} ${age(previous!.at, now)} ago. Nothing was changed${later}`, 409, previous);
+            }
           }
         }
-        applyTaskUpdate(note, p);
+        applyTaskUpdate(note, task);
+        if (task.after !== undefined || task.not_after !== undefined) this.setAfter(note, task.after, task.not_after);
         break;
+      }
       default: invalid('Unsupported mutation');
     }
 
@@ -197,8 +241,109 @@ export class SqliteStore implements Store {
     }
     const receipt = this.record(note, eventKind, p, who, now);
     if (previous) receipt.previous = previous;
+    if (takenOver) receipt.taken_over = takenOver;
+    // Cancelling a task no longer holds up the tasks that wait on it; whoever cancelled it is told which, to look at them.
+    if ((method === 'update_task' && p.status === 'cancelled') || (method === 'delete' && note.kind === 'task')) {
+      const waiting = this.all(`SELECT name FROM notes n WHERE deleted_at IS NULL AND kind='task' AND status IN ('todo','doing') AND coalesce(json_type(metadata,${AFTER_PATH}),'')='array' AND EXISTS (SELECT 1 FROM json_each(metadata,${AFTER_PATH}) a WHERE a.value=?) ORDER BY name`, note.id).map(row => row.name as string);
+      if (waiting.length) receipt.waiting = waiting;
+    }
+    if (p.after !== undefined || p.not_after !== undefined) receipt.after = this.afterNames(note);
     if (method === 'append') this.index(note);
     return receipt;
+  }
+
+  /**
+   * Make a task wait on the tasks named in `add`, and stop waiting on those in `remove`. They are kept by id,
+   * so renaming one keeps the link, and a task cannot end up waiting on itself through others.
+   */
+  private setAfter(task: Note, add: unknown, remove: unknown): void {
+    let after = afterIds(task);
+    if (remove !== undefined) {
+      for (const name of names(remove, 'not_after')) {
+        const row = this.get('SELECT id FROM notes WHERE name=? AND deleted_at IS NULL', name);
+        if (!row || !after.includes(row.id as string)) invalid(`'${task.name}' does not wait on '${name}'`);
+        after = after.filter(id => id !== row.id);
+      }
+    }
+    if (add !== undefined) {
+      for (const name of names(add, 'after')) {
+        const row = this.get('SELECT * FROM notes WHERE name=? AND deleted_at IS NULL', name);
+        if (!row) throw new HiveNoteError('not_found', `No task named '${name}' to wait on`, 404);
+        const other = toNote(row);
+        if (other.kind !== 'task') invalid(`'${name}' is a note, not a task; a task waits only on tasks`);
+        if (other.id === task.id) invalid(`'${task.name}' cannot wait on itself`);
+        if (this.waitsOnThrough(other.id, task.id)) invalid(`'${task.name}' cannot wait on '${name}', which already waits on '${task.name}'`);
+        if (!after.includes(other.id)) after.push(other.id);
+      }
+    }
+    task.metadata = metadata(withAfter(task.metadata, after));
+  }
+
+  /** Tasks that waited on this id no longer do. Not a new revision of them: the link pointed at something gone. */
+  private forgetWaitsOn(id: string): void {
+    const rows = this.all(`SELECT id,metadata FROM notes n WHERE coalesce(json_type(metadata,${AFTER_PATH}),'')='array' AND EXISTS (SELECT 1 FROM json_each(metadata,${AFTER_PATH}) a WHERE a.value=?)`, id);
+    for (const row of rows) {
+      const meta = JSON.parse(row.metadata as string) as Record<string, unknown>;
+      this.run('UPDATE notes SET metadata=? WHERE id=?', JSON.stringify(withAfter(meta, afterIds({ metadata: meta }).filter(other => other !== id))), row.id as string);
+    }
+  }
+
+  /** Whether the task `from` waits on `target`, directly or through the tasks it waits on. */
+  private waitsOnThrough(from: string, target: string): boolean {
+    const seen = new Set<string>();
+    const next = [from];
+    while (next.length) {
+      const id = next.pop()!;
+      if (id === target) return true;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const row = this.get('SELECT metadata FROM notes WHERE id=?', id);
+      if (row) next.push(...afterIds({ metadata: JSON.parse(row.metadata as string) as Record<string, unknown> }));
+    }
+    return false;
+  }
+
+  /** The live tasks a task waits on, by name. */
+  private afterNames(task: Note): string[] {
+    return afterIds(task).flatMap(id => {
+      const row = this.get('SELECT name FROM notes WHERE id=? AND deleted_at IS NULL', id);
+      return row ? [row.name as string] : [];
+    });
+  }
+
+  /** For each task given that still waits on others, the names of those that are not done. */
+  private waitsOn(notes: Note[]): Map<string, string[]> {
+    const waiting = new Map<string, string[]>();
+    const ids = [...new Set(notes.filter(note => note.kind === 'task').flatMap(afterIds))];
+    if (!ids.length) return waiting;
+    // One query for every task they wait on, however many tasks are on the page.
+    const open = new Map(this.all(`SELECT id,name FROM notes WHERE deleted_at IS NULL AND status NOT IN ('done','cancelled') AND id IN (SELECT value FROM json_each(?))`, JSON.stringify(ids)).map(row => [row.id as string, row.name as string]));
+    for (const note of notes) {
+      if (note.kind !== 'task') continue;
+      const names = afterIds(note).flatMap(id => (open.has(id) ? [open.get(id)!] : []));
+      if (names.length) waiting.set(note.id, names);
+    }
+    return waiting;
+  }
+
+  /**
+   * The task take hands out: the oldest todo task whose prerequisites are all done, or else the doing task that has
+   * been idle longest past the takeover time. Picked inside the write, so agents asking at once each get another.
+   */
+  private next(now: string): Note {
+    const ready = this.get(`SELECT * FROM notes n WHERE deleted_at IS NULL AND kind='task' AND status='todo' AND NOT ${BLOCKED} ORDER BY ${ADDED},rowid LIMIT 1`);
+    if (ready) return toNote(ready);
+    if (this.takeoverMs > 0) {
+      const idle = this.get(`SELECT * FROM notes n WHERE deleted_at IS NULL AND kind='task' AND status='doing' AND activity_at<=? AND NOT ${BLOCKED} ORDER BY activity_at,rowid LIMIT 1`, new Date(Date.parse(now) - this.takeoverMs).toISOString());
+      if (idle) return toNote(idle);
+    }
+    const count = (where: string): number => Number(this.get(`SELECT count(*) AS n FROM notes n WHERE deleted_at IS NULL AND kind='task' AND ${where}`)?.n);
+    const waiting = count(`status='todo' AND ${BLOCKED}`), doing = count("status='doing'");
+    const tasks = (n: number): string => `${n} task${n === 1 ? '' : 's'}`;
+    const board = waiting || doing
+      ? `${[waiting && `${tasks(waiting)} ${waiting === 1 ? 'waits' : 'wait'} on others to be done`, doing && `${tasks(doing)} ${doing === 1 ? 'is' : 'are'} being done`].filter(Boolean).join(', and ')}. hivenote wait wakes when something changes`
+      : 'No task is waiting to be done';
+    throw new HiveNoteError('nothing_ready', `Nothing is ready to take. ${board}`, 404);
   }
 
   /** Replace exactly one occurrence of old_str. */
@@ -217,7 +362,8 @@ export class SqliteStore implements Store {
   /** Bring back an old revision as a new one. Never revives a stale claim. */
   private restored(note: Note, rev: unknown): Note {
     const old = this.historical(note, rev);
-    return { ...old, rev: note.rev, created_at: note.created_at, deleted_at: null, claimed_by: null, claim_expires_at: null };
+    // What a task waits on changes only through after and not_after, which check for loops; a restore keeps it as it is now.
+    return { ...old, metadata: withAfter(old.metadata ?? {}, afterIds(note)), rev: note.rev, created_at: note.created_at, deleted_at: null, claimed_by: null, claim_expires_at: null };
   }
 
 
@@ -339,9 +485,25 @@ export class SqliteStore implements Store {
       where.push('status=?');
       args.push(p.status as string);
     }
+    // Ready tasks come oldest first, the order take hands them out in.
+    if (p.ready !== undefined) {
+      if (p.ready !== true) invalid('ready is true, or left out');
+      where.push("kind='task'", "status='todo'", `NOT ${BLOCKED}`);
+    }
+    // A folder is the part of a name before its last /; listing one shows everything under it.
+    if (p.folder !== undefined) {
+      where.push('instr(name,?)=1');
+      args.push(text(p.folder, 'folder', LIMITS.name).replace(/\/+$/u, '') + '/');
+    }
     const clause = where.join(' AND ');
-    const total = Number(this.get(`SELECT count(*) AS n FROM notes WHERE ${clause}`, ...args)?.n);
-    const notes = this.all(`SELECT * FROM notes WHERE ${clause} ORDER BY name,id LIMIT ? OFFSET ?`, ...args, limit, offset).map(row => shape(toNote(row)));
+    const total = Number(this.get(`SELECT count(*) AS n FROM notes n WHERE ${clause}`, ...args)?.n);
+    const found = this.all(`SELECT * FROM notes n WHERE ${clause} ORDER BY ${p.ready ? `${ADDED},rowid` : 'name,id'} LIMIT ? OFFSET ?`, ...args, limit, offset).map(toNote);
+    const waiting = this.waitsOn(found);
+    const notes = found.map(note => {
+      const entry = shape(note);
+      const open = waiting.get(note.id);
+      return open ? { ...entry, waits_on: open } : entry;
+    });
     return { notes, total, offset, has_more: offset + notes.length < total, seq: this.seq() };
   }
 
@@ -383,7 +545,9 @@ export class SqliteStore implements Store {
       updates.push(...recent.reverse());
     }
     updates.sort((a, b) => a.seq - b.seq);
-    return { notes, missing, updates, updates_has_more, ...(too_big.length ? { too_big } : {}), seq: this.seq() };
+    const waiting = this.waitsOn(notes);
+    const waits_on = Object.fromEntries(notes.filter(note => waiting.has(note.id)).map(note => [note.name, waiting.get(note.id)!]));
+    return { notes, missing, updates, updates_has_more, ...(too_big.length ? { too_big } : {}), ...(waiting.size ? { waits_on } : {}), seq: this.seq() };
   }
 
   private search(p: Params): unknown {
@@ -529,7 +693,7 @@ function createNote(p: Params, who: Attribution, now: string): Note {
     due_at: p.due_at === undefined ? null : due(p.due_at),
     claimed_by: null,
     claim_expires_at: null,
-    metadata: p.metadata === undefined ? {} : metadata(p.metadata),
+    metadata: p.metadata === undefined ? {} : withAfter(metadata(p.metadata), []),
     created_at: now,
     updated_at: now,
     activity_at: now,
@@ -545,14 +709,28 @@ function applyReplace(note: Note, p: Params): void {
   if (p.name !== undefined) note.name = text(p.name, 'name', LIMITS.name);
   if (p.description !== undefined) note.description = text(p.description, 'description', LIMITS.description, true);
   if (p.content !== undefined) note.content = text(p.content, 'content', LIMITS.content, true);
-  if (p.metadata !== undefined) note.metadata = metadata(p.metadata);
+  if (p.metadata !== undefined) note.metadata = keepAfter(note, p.metadata);
   if (JSON.stringify([note.name, note.description, note.content, note.metadata]) === before) invalid('replace would not change anything');
+}
+
+/** A list of task names, each once. */
+function names(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 100) invalid(`${label} must list 1 to 100 task names`);
+  return [...new Set(value.map(name => text(name, label, LIMITS.name)))];
 }
 
 function applyTaskUpdate(note: Note, p: Params): void {
   if (note.kind !== 'task') invalid('Only tasks have status or due dates');
-  if (!['status', 'due_at', 'metadata'].some(key => p[key] !== undefined)) invalid('update_task requires at least one field');
+  if (!['status', 'due_at', 'metadata', 'after', 'not_after'].some(key => p[key] !== undefined)) invalid('update_task requires at least one field');
   if (p.status !== undefined) note.status = status(p.status);
   if (p.due_at !== undefined) note.due_at = due(p.due_at);
-  if (p.metadata !== undefined) note.metadata = metadata(p.metadata);
+  if (p.metadata !== undefined) note.metadata = keepAfter(note, p.metadata);
+}
+
+/**
+ * New metadata for a note, keeping the tasks it waits on: those change only through after and not_after,
+ * so a write that sets other metadata can't drop them, or make a loop the after check would refuse.
+ */
+function keepAfter(note: Note, value: unknown): Record<string, unknown> {
+  return metadata(withAfter(metadata(value), afterIds(note)));
 }

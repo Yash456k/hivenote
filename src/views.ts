@@ -53,6 +53,8 @@ export interface BriefNote {
   /** For tasks: who made the latest change, and who was last active on it (a progress line counts), each as agent@machine. */
   changed_by?: string;
   active_by?: string;
+  /** For tasks: the tasks it waits on that are not done yet, by name. */
+  waits_on?: string[];
 }
 
 export function brief(note: Note): BriefNote {
@@ -66,6 +68,23 @@ export function brief(note: Note): BriefNote {
     entry.active_by = byline(note.last_activity_attribution);
   }
   return entry;
+}
+
+/**
+ * The ids of the tasks a task waits on, kept in its metadata so that no schema change was needed. The key is
+ * namespaced, so a key of the caller's own (such as `after`, which 0.5 stored as given) is never taken over.
+ */
+export const AFTER_KEY = 'hivenote:after';
+/** The same key as an SQLite JSON path. */
+export const AFTER_PATH = `'$."${AFTER_KEY}"'`;
+export function afterIds(note: { metadata?: Record<string, unknown> }): string[] {
+  const after = note.metadata?.[AFTER_KEY];
+  return Array.isArray(after) ? after.filter((id): id is string => typeof id === 'string') : [];
+}
+/** Metadata with the waited-on ids set to `after` (left out when there are none), the rest as given. */
+export function withAfter(metadata: Record<string, unknown>, after: string[]): Record<string, unknown> {
+  const { [AFTER_KEY]: _before, ...rest } = metadata;
+  return after.length ? { ...rest, [AFTER_KEY]: after } : rest;
 }
 
 /** list and search return brief entries unless the caller asks for full summaries. */

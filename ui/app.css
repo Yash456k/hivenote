@@ -302,6 +302,7 @@ code {
 .card:hover { transform: translateY(-2px); box-shadow: var(--lift-shadow); }
 .card:focus-visible { outline: 3px solid var(--honey); outline-offset: 2px; }
 .card strong { display: block; font-weight: 850; font-size: 14.5px; overflow-wrap: anywhere; }
+strong .folder { display: block; color: var(--ink-2); font-size: 11.5px; font-weight: 800; }
 .card p { margin: 3px 0 0; color: var(--ink-2); font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
 .card .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .card .meta span { font-size: 11.5px; font-weight: 800; padding: 2px 9px; border-radius: 999px; background: var(--surface-2); color: var(--ink-2); }
