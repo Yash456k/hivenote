@@ -10,7 +10,7 @@ import { configDirectory, defaultDbPath, loadConfig, readToken, resolveConfig, t
 import { conflictCount, isMadeHere, isQueued, kept, refused, reminder, type QueueStore } from './queue.js';
 import { assertSupportedNode, detectAgent, quietSqliteWarning } from './runtime.js';
 import { WAIT_DEFAULTS, changesSince, waitForAnyChange, waitForNote, type TaskStatus } from './wait.js';
-import { pretty } from './pretty.js';
+import { current, pretty } from './pretty.js';
 import { lean, leanDetails, word } from './lean.js';
 
 /** The hivenote command: read the words, pick this machine's hive or the queen's, run one command. */
@@ -335,7 +335,8 @@ async function take(store: Store, note: string): Promise<unknown> {
  * The mark is made by then: if the task cannot be read, the short answer is given as it always was.
  */
 async function shown(store: Store, note: string, marked: unknown): Promise<unknown> {
-  if (view.human || view.full) return marked;
+  // A person at a terminal is shown the progress of a task they take as well (only take prints it there).
+  if (view.full || (view.human && view.command !== 'take')) return marked;
   try {
     const { notes: [task], updates, updates_has_more, seq } = await store.call('read', { names: [note] }) as { notes: unknown[]; updates?: unknown[]; updates_has_more?: boolean; seq?: number };
     return task ? { ...marked as object, task: { note: task, updates, updates_has_more, seq } } : marked;
@@ -874,7 +875,14 @@ if (process.argv[1] && realpathSync(resolve(process.argv[1])) === fileURLToPath(
     // Never print arbitrary exceptions, request headers, tokens or stack traces.
     const e = error instanceof HiveNoteError ? error : new HiveNoteError('internal_error', 'Operation failed', 500);
     process.exitCode = 1;
-    if (view.human) { process.stderr.write(`hivenote: ${e.message}\n`); remind(); return; }
+    if (view.human) {
+      process.stderr.write(`hivenote: ${e.message}\n`);
+      // A refused edit says "here is the note": a person at a terminal sees it too, not only JSON readers.
+      const note = (e.details as { current?: { content?: unknown } } | undefined)?.current;
+      if (e.code === 'conflict' && note && typeof note.content === 'string') process.stderr.write(`\n${current(note as Parameters<typeof current>[0])}\n`);
+      remind();
+      return;
+    }
     process.stderr.write(JSON.stringify({ error: { code: e.code, message: e.message, status: e.status, ...(e.details === undefined ? {} : { details: view.full ? e.details : leanDetails(e.details) }) }, ...counts() }) + '\n');
   }).finally(leave);
 }

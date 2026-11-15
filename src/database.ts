@@ -66,12 +66,21 @@ const SCHEMA = `
   PRAGMA user_version=${SCHEMA_VERSION};
 `;
 
+/** SQLite's own words for a file that is not a database, or one whose pages are broken. */
+const DAMAGED = /file is not a database|database disk image is malformed/iu;
+
+/** What to do about a damaged file: it is left as it is, and a backup goes in its place. */
+function damaged(file: string): HiveNoteError {
+  return new HiveNoteError('storage_error', `${file} is damaged, or is not a HiveNote database, so the hive can't be opened. HiveNote left it as it is. Put a backup made with hivenote backup in its place, or point HIVENOTE_DB at another file`, 500);
+}
+
 /** Turn SQLite errors into safe HiveNote errors; never leak SQL text. */
 export function storageError(error: unknown): never {
   if (error instanceof HiveNoteError) throw error;
   const message = error instanceof Error ? error.message : '';
   if (/UNIQUE constraint failed/iu.test(message)) throw new HiveNoteError('conflict', 'ID or live name already exists', 409);
   if (/locked|busy/iu.test(message)) throw new HiveNoteError('busy', 'The hive is busy with another write; try again', 503);
+  if (DAMAGED.test(message)) throw damaged("The hive's database file");
   throw new HiveNoteError('storage_error', 'Database operation failed', 500);
 }
 
@@ -140,6 +149,8 @@ export function openDatabase(path: string): DatabaseSync {
     });
   } catch (error) {
     db.close();
+    // Opening is where a broken file shows first: name it, since this machine's owner is the one reading.
+    if (error instanceof Error && !(error instanceof HiveNoteError) && DAMAGED.test(error.message)) throw damaged(path);
     storageError(error);
   }
   return db;

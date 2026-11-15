@@ -27,7 +27,7 @@ The description and text a command needs are saved exactly as written, even when
 
 **Changes and undo.** Every version of a note is kept in its history with who made it and when, including deletes: `restore` brings back any earlier version, and it finds a deleted note by its name. Progress lines are kept too, but they are not versions, so `restore` leaves them as they are. There is no version checking; the latest write wins. `edit` works on the current text and needs its old text to appear exactly once, so an edit based on outdated text is refused instead of landing in the wrong place. `append` adds a progress line without changing the note's text.
 
-**Search.** It covers each note's name, description, text and latest 100 progress lines. Plain words find notes containing all of them, so names like `api-decisions` and hosts like `stg.example.com` work as typed. Quotes, parentheses, `*` or `AND`/`OR`/`NOT` switch to SQLite full-text syntax, such as `"exact phrase"` or `deploy*`.
+**Search.** It covers each note's name, description, text and latest 100 progress lines. Plain words find notes containing all of them, so names like `api-decisions`, hosts like `stg.example.com` and text like `TODO: fix` or `localhost:3000` work as typed. Quotes, parentheses, `*`, `AND`/`OR`/`NOT`/`NEAR`, a column (`name:deploy`) or `^` at the start of a word switch to SQLite full-text syntax, such as `"exact phrase"` or `deploy*`; put a word in double quotes to search for it as written, such as `"NOT"`.
 
 **Size.** One answer is at most 5 MB. `read` names any note that didn't fit in `too_big` (read it on its own), and says when older progress was left out.
 

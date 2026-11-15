@@ -30,7 +30,8 @@ function validate(input: unknown): Config {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new HiveNoteError('invalid_config', 'Config must be a JSON object');
   const value = input as Record<string, unknown>;
   const allowed = ['db', 'url', 'tokenFile', 'agent', 'session', 'helper', 'takeover'];
-  if (Object.keys(value).some(key => !allowed.includes(key))) throw new HiveNoteError('invalid_config', 'Config contains unsupported fields');
+  const unknown = Object.keys(value).filter(key => !allowed.includes(key));
+  if (unknown.length) throw new HiveNoteError('invalid_config', `Config contains settings this HiveNote doesn't know: ${unknown.join(', ')}. It knows ${allowed.join(', ')}`);
   for (const key of allowed) if (value[key] !== undefined && (typeof value[key] !== 'string' || !value[key])) throw new HiveNoteError('invalid_config', `Config field ${key} must be a nonempty string`);
   if (value.db && value.url) throw new HiveNoteError('invalid_config', '--db and --url are mutually exclusive, including persistent configuration');
   if (typeof value.url === 'string') validateServerUrl(value.url);
@@ -48,8 +49,15 @@ export function takeoverMs(config: Config): number | undefined {
 }
 export function loadConfig(path = configPath()): Config {
   if (!existsSync(path)) return {};
-  try { return validate(JSON.parse(readFileSync(path, 'utf8')) as unknown); }
-  catch (error) { if (error instanceof HiveNoteError) throw error; throw new HiveNoteError('invalid_config', 'Cannot read config JSON'); }
+  // Whoever reads the error has to find the file to fix it, so it is named.
+  let saved: unknown;
+  try { saved = JSON.parse(readFileSync(path, 'utf8')) as unknown; }
+  catch (error) {
+    const why = error instanceof SyntaxError ? 'it is not valid JSON' : 'the file cannot be read';
+    throw new HiveNoteError('invalid_config', `Cannot read config JSON in ${path}: ${why}. Fix it, or move it away (a machine that was connected to a queen then runs hivenote connect again)`);
+  }
+  try { return validate(saved); }
+  catch (error) { if (error instanceof HiveNoteError) throw new HiveNoteError(error.code, `${error.message} (in ${path})`, error.status); throw error; }
 }
 export function saveConfig(config: Config, path = configPath()): Config {
   const result = validate(config);

@@ -5,6 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { age, byline, clientParams, isMethod, MUTATIONS, HiveNoteError, type Actor, type Attribution, type Event, type Method, type Note, type Params, type Previous, type Store } from './contract.js';
 import { openDatabase, storageError, transaction } from './database.js';
 import { held, HOLD_LIMIT_MS } from './wait.js';
+import { word } from './lean.js';
 import { due, id, integer, invalid, json, LIMITS, metadata, params as checkParams, status, STATUSES, text } from './validate.js';
 import { AFTER_KEY, AFTER_PATH, afterIds, withAfter, JSON_COLUMNS, NOTE_COLUMNS, toEvent, toNote, view, type Row } from './views.js';
 
@@ -57,13 +58,17 @@ interface Receipt {
  */
 const RECEIPTS_KEPT = 2000;
 
+/** A column filter as FTS5 reads it: any case, `-` to leave a column out, or a `{name description}` set. */
+const COLUMN_FILTER = /(?:^|[\s(])-?\s*(?:(?:name|description|content)|\{[^{}]*\})\s*:/iu;
+
 /**
- * Plain words are searched as words, so names like api-decisions and hosts like
- * stg.example.com just work. Quotes, parentheses, * or AND/OR/NOT/NEAR switch to
- * full-text query syntax.
+ * Plain words are searched as words, so names like api-decisions, hosts like
+ * stg.example.com and text like "TODO: fix" or http://localhost:3000 just work.
+ * Quotes, parentheses, * or AND/OR/NOT/NEAR switch to full-text query syntax, and so
+ * does a column (name:, description:, content:) or ^ at the start of a word.
  */
 function searchQuery(query: string): string {
-  if (/["()*^:]|\b(AND|OR|NOT|NEAR)\b/u.test(query)) return query;
+  if (/["()*]|\b(AND|OR|NOT|NEAR)\b|(?:^|[\s(])\^/u.test(query) || COLUMN_FILTER.test(query)) return query;
   const words = query.split(/\s+/u).filter(Boolean);
   return words.length ? words.map(word => `"${word}"`).join(' ') : query;
 }
@@ -440,7 +445,7 @@ export class SqliteStore implements Store {
 
   private historical(note: Note, rev: unknown): Note {
     const row = this.get('SELECT snapshot FROM events WHERE note_id=? AND revision=?', note.id, integer(rev, 'rev', 1));
-    if (!row) throw new HiveNoteError('not_found', 'Revision not found', 404);
+    if (!row) throw new HiveNoteError('not_found', `'${note.name}' has no version ${String(rev)}. hivenote history ${word(note.name)} lists its versions`, 404);
     return JSON.parse(row.snapshot as string) as Note;
   }
 
@@ -563,7 +568,7 @@ export class SqliteStore implements Store {
       return { notes, total, offset, has_more: offset + notes.length < total };
     } catch (error) {
       if (error instanceof HiveNoteError) throw error;
-      return invalid('Invalid search; check that quotes and parentheses are balanced');
+      return invalid('Invalid search. Quotes, parentheses, *, a column such as name: and the words AND, OR, NOT and NEAR are search syntax: check that quotes and parentheses are balanced, and put a word in double quotes to search for it as written, such as "NOT" or name:"api-decisions"');
     }
   }
 
@@ -720,7 +725,7 @@ function names(value: unknown, label: string): string[] {
 }
 
 function applyTaskUpdate(note: Note, p: Params): void {
-  if (note.kind !== 'task') invalid('Only tasks have status or due dates');
+  if (note.kind !== 'task') invalid(`'${note.name}' is a note, not a task: only tasks have a status or a due date`);
   if (!['status', 'due_at', 'metadata', 'after', 'not_after'].some(key => p[key] !== undefined)) invalid('update_task requires at least one field');
   if (p.status !== undefined) note.status = status(p.status);
   if (p.due_at !== undefined) note.due_at = due(p.due_at);
