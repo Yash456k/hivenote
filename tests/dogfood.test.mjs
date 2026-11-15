@@ -24,6 +24,10 @@ test('search takes text with colons as plain words, and says how to search for a
   // A column or a ^ at the start of a word is still search syntax.
   assert.deepEqual((await cliJson(['--db', db, 'search', 'description:server'])).notes.map(note => note.name), ['crash']);
   assert.deepEqual((await cliJson(['--db', db, 'search', '^deploy'])).notes.map(note => note.name), ['deploy']);
+  // Every column filter FTS5 knows still works as it did: any case, a left-out column, a set of columns.
+  for (const query of ['Description:server', 'NAME:crash', '-content:server', '{name description}:server', '- {name}:server']) {
+    assert.deepEqual((await cliJson(['--db', db, 'search', query])).notes.map(note => note.name), ['crash'], query);
+  }
   // NOT on its own is the operator with nothing around it: the answer says to quote it.
   const refused = await run(process.execPath, [cli, '--db', db, 'search', 'NOT']);
   assert.equal(refused.code, 1);

@@ -58,6 +58,9 @@ interface Receipt {
  */
 const RECEIPTS_KEPT = 2000;
 
+/** A column filter as FTS5 reads it: any case, `-` to leave a column out, or a `{name description}` set. */
+const COLUMN_FILTER = /(?:^|[\s(])-?\s*(?:(?:name|description|content)|\{[^{}]*\})\s*:/iu;
+
 /**
  * Plain words are searched as words, so names like api-decisions, hosts like
  * stg.example.com and text like "TODO: fix" or http://localhost:3000 just work.
@@ -65,7 +68,7 @@ const RECEIPTS_KEPT = 2000;
  * does a column (name:, description:, content:) or ^ at the start of a word.
  */
 function searchQuery(query: string): string {
-  if (/["()*]|\b(AND|OR|NOT|NEAR)\b|(?:^|[\s(])(?:name|description|content)\s*:|(?:^|[\s(])\^/u.test(query)) return query;
+  if (/["()*]|\b(AND|OR|NOT|NEAR)\b|(?:^|[\s(])\^/u.test(query) || COLUMN_FILTER.test(query)) return query;
   const words = query.split(/\s+/u).filter(Boolean);
   return words.length ? words.map(word => `"${word}"`).join(' ') : query;
 }
