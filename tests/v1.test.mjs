@@ -30,7 +30,7 @@ test('wait holds on for as long as its last word says', async t => {
   const short = await run(process.execPath, [cli, '--db', db, 'wait', 'ship-it', 'done', '1s']);
   assert.equal(JSON.parse(short.stderr).error.code, 'timeout');
   // The answer says where the task stands, so the one waiting need not read it to find out.
-  assert.match(short.stderr, /did not reach done within 1 seconds\. It is todo, last changed \d+s ago/u);
+  assert.match(short.stderr, /did not reach done within 1 second\. It is todo, last changed \d+s ago/u);
   assert.ok(Date.now() - started < 8000, 'gave up after about a second, not nine minutes');
   // forever has no limit, and still wakes the moment the task is done.
   const forever = run(process.execPath, [cli, '--db', db, 'wait', 'ship-it', 'done', 'forever']);

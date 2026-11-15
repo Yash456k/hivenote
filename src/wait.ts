@@ -117,6 +117,11 @@ export async function changesSince(store: Store, since: number): Promise<{ event
 }
 
 /** The hive could not be reached this time (a restart, a network blip); worth checking again. */
+/** "1 second", "30 seconds". */
+function seconds(count: number): string {
+  return `${count} second${count === 1 ? '' : 's'}`;
+}
+
 function unreachable(error: unknown): boolean {
   return error instanceof HiveNoteError && (error.code === 'transport_error' || error.status === 503);
 }
@@ -180,7 +185,7 @@ export async function waitForNote(store: Store, options: WaitOptions): Promise<W
     if (done) return answer(options.status !== undefined ? 'status' : 'changed');
   }
   // Say where it stands, so the caller need not read it to find out.
-  const within = `within ${options.timeoutSeconds} seconds`;
+  const within = `within ${seconds(options.timeoutSeconds)}`;
   if (!last) throw new HiveNoteError('timeout', `'${options.name}' was not added ${within}`, 408);
   const stands = `last changed ${age(last.activity_at)} ago by ${byline(last.last_activity_attribution)}`;
   throw new HiveNoteError('timeout', options.status !== undefined
@@ -232,5 +237,5 @@ export async function waitForAnyChange(store: Store, options: Pick<WaitOptions, 
     }));
     return { reason: 'changed', waited_ms: Date.now() - started, changes, seq: feed.cursor };
   }
-  throw new HiveNoteError('timeout', `Nothing changed within ${options.timeoutSeconds} seconds`, 408);
+  throw new HiveNoteError('timeout', `Nothing changed within ${seconds(options.timeoutSeconds)}`, 408);
 }

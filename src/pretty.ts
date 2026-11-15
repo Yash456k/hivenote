@@ -1,5 +1,5 @@
 import { byline, type Attribution } from './contract.js';
-import { headsUp } from './lean.js';
+import { headsUp, word } from './lean.js';
 import { writes } from './merge.js';
 
 /**
@@ -11,7 +11,7 @@ interface Brief { name: string; description: string; kind: string; status?: stri
 interface Note extends Brief { id: string; content: string; rev: number; last_attribution?: Who; last_activity_attribution?: Who }
 type Who = Attribution;
 interface Change { note: string; kind: string; by: string; at: string; body?: string; status?: string }
-interface Event { note_id: string; kind: string; revision: number | null; body: string | null; timestamp: string; attribution?: Who }
+interface Event { note_id: string; kind: string; revision: number | null; body: string | null; timestamp: string; attribution?: Who; snapshot?: { name: string } | null }
 
 const color = !process.env.NO_COLOR;
 const bold = (text: string): string => color ? `\x1b[1m${text}\x1b[22m` : text;
@@ -53,6 +53,7 @@ function listing(notes: Brief[], empty: string, indent = ''): string {
  * under its path, in order of path, with the names in it shown without the path.
  */
 function folders(notes: Brief[], empty: string): string {
+  if (!notes.length) return empty;
   const groups = new Map<string, Brief[]>();
   for (const note of notes) {
     const cut = note.name.lastIndexOf('/');
@@ -70,12 +71,14 @@ function page(note: Note, updates: Event[]): string {
   const lines = [bold(note.name), dim(note.description)];
   if (note.kind === 'task') lines.push(sticker({ ...note, changed_by: who(note.last_attribution), ...(note.last_activity_attribution ? { active_by: who(note.last_activity_attribution) } : {}) }));
   if (note.content) lines.push('', note.content);
+  return [...lines, ...progressLines(note, updates)].join('\n');
+}
+
+/** A note's progress lines under a heading; none when it has none. */
+function progressLines(note: Note, updates: Event[]): string[] {
   const progress = updates.filter(update => update.note_id === note.id && update.body);
-  if (progress.length) {
-    lines.push('', dim('Progress'));
-    for (const update of progress) lines.push(`${dim(`${who(update.attribution)}, ${ago(update.timestamp)}:`)} ${update.body}`);
-  }
-  return lines.join('\n');
+  if (!progress.length) return [];
+  return ['', dim('Progress'), ...progress.map(update => `${dim(`${who(update.attribution)}, ${ago(update.timestamp)}:`)} ${update.body}`)];
 }
 
 const KIND: Record<string, string> = {
@@ -95,7 +98,14 @@ function history(events: Event[]): string {
     if (event.kind === 'append') return `    progress  ${dim(by)}  ${event.body ?? ''}`;
     return `${String(event.revision ?? '').padStart(3)} ${(KIND[event.kind] ?? event.kind).padEnd(9)} ${dim(by)}`;
   });
-  return `${dim('VERSION')}\n${lines.join('\n')}\n${dim('Undo with: hivenote restore NAME VERSION')}`;
+  // The undo line is ready to copy: the note's own name, from its latest version.
+  const name = events.findLast(event => event.snapshot)?.snapshot?.name;
+  return `${dim('VERSION')}\n${lines.join('\n')}\n${dim(`Undo with: hivenote restore ${name === undefined ? 'NAME' : word(name)} VERSION`)}`;
+}
+
+/** The note as it stands, for an answer that refused a change to it (an edit whose old text is not there). */
+export function current(note: Note): string {
+  return page(note, []);
 }
 
 export function pretty(command: string, value: unknown): string {
@@ -134,7 +144,12 @@ export function pretty(command: string, value: unknown): string {
       const warning = headsUp(v as unknown as Parameters<typeof headsUp>[0]);
       const over = v.taken_over as { from: string; at: string } | undefined;
       const took = over ? `\n${dim(`Taken over from ${over.from}, idle since ${ago(over.at)}`)}` : '';
-      if (command === 'take') return `Took ${bold(note!.name)}${took}\n${dim(note!.description)}${note!.content ? `\n\n${note!.content}` : ''}`;
+      if (command === 'take') {
+        // The task as it stands, progress included, so whoever took it sees what was already done.
+        const task = v.task as { note: Note; updates?: Event[] } | undefined;
+        const progress = task ? progressLines(task.note, task.updates ?? []).join('\n') : '';
+        return `Took ${bold(note!.name)}${took}\n${dim(note!.description)}${note!.content ? `\n\n${note!.content}` : ''}${progress ? `\n${progress}` : ''}`;
+      }
       return `Marked ${bold(note!.name)} ${note!.status ?? 'todo'}${took}${warning ? `\n${dim(warning)}` : ''}`;
     }
     case 'status':

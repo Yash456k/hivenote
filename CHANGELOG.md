@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+Rough edges found by using every command the way a newcomer would, on a throwaway hive.
+
+- **Search takes text with colons as typed.** `hivenote search TODO: fix`, `search localhost:3000` and `search error: ENOENT` find the note instead of being refused as broken search syntax. A column (`name:`, `description:`, `content:`) or `^` at the start of a word still switch to full-text syntax, and a refused search says which words are syntax and how to quote one.
+- **`take` at a terminal shows the task's progress**, as the README and `hivenote help` say; it showed only the text before.
+- **A refused `edit` at a terminal shows the note**, which its message promises ("Here is the note"); only the JSON answer had it before.
+- **Errors say which file and what to do.** A damaged data file, or one that is not a HiveNote database, is named and the answer says HiveNote left it as it is and to put a backup in its place, instead of "Database operation failed". A `config.json` that is not JSON, or has a setting HiveNote doesn't know, is named with the setting. `restore NAME 9` says the note has no version 9 and how to list them; `mark` on a note names it.
+- At a terminal, `list` on an empty hive says how to add a note instead of printing an empty line, `history` ends with an undo line that has the note's name in it, and a one-second wait says "1 second".
+
 ## 1.0.0
 
 Tasks can wait on each other, agents can ask for the next one instead of picking it, notes can be put in folders, and a worker keeps working while the queen can't be reached. Old commands, the JSON they print and hive files made by 0.5 work as they did: 1.0 uses the same file, unchanged, so going back to 0.5 is just installing it (take out a `takeover` line from `config.json` first: 0.5 refuses settings it doesn't know). A 1.0 worker needs the queen on 1.0 for `ready`, `take`, `after`, `task --after` and folders; with an older queen they fail with `queen_too_old` and change nothing, and everything else works.
